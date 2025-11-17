@@ -182,6 +182,29 @@ Although this is __not recommend__ and primarily exist for easy integration with
 
 <!-- TODO: godbolt with include. -->
 
+## Custom Work-Stealing Schedulers
+
+Libfork's benchmark infrastructure can be used to test custom work-stealing implementations. This allows you to:
+
+- Implement your own work-stealing algorithm (e.g., Lace, ABP, etc.)
+- Benchmark it against libfork's built-in schedulers and other frameworks (TBB, OpenMP, Taskflow)
+- Use the same benchmark suite (fibonacci, nqueens, matrix multiplication, etc.)
+
+### Quick Start
+
+1. **Implement your scheduler** in `custom_schedulers/your_scheduler.hpp` with a `schedule(lf::submit_handle)` method
+2. **Create benchmark files** like `bench/source/fib/custom_your.cpp`
+3. **Build and run**: 
+   ```bash
+   cmake -B build -DENABLE_CUSTOM_SCHEDULERS=ON
+   cmake --build build
+   ./build/bench/benchmark --benchmark_filter=custom_your
+   ```
+
+See [QUICKSTART.md](QUICKSTART.md) for a complete tutorial and [CUSTOM_SCHEDULERS.md](CUSTOM_SCHEDULERS.md) for detailed documentation.
+
+A template Lace scheduler implementation is provided in `custom_schedulers/lace_pool.hpp` as a starting point.
+
 ## API reference
 
 See the generated [docs](https://conorwilliams.github.io/libfork/).
