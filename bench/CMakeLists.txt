@@ -80,36 +80,63 @@ else()
   message(WARNING "concurrencpp not found, skipping concurrencpp benchmarks")
 endif()
 
-# TMC
+# ---- Custom schedulers (e.g., Lace) ----
 
-include(FetchContent)
+option(ENABLE_CUSTOM_SCHEDULERS "Enable benchmarks for custom work-stealing schedulers" ON)
 
-FetchContent_Declare(
-  tmc
-  GIT_REPOSITORY https://github.com/tzcnt/TooManyCooks.git
-  GIT_TAG df81ef9f493e88df6b7ac08f0490e968866fa10b
-  CONFIGURE_COMMAND "" BUILD_COMMAND ""
-)
-
-FetchContent_GetProperties(tmc)
-
-if(NOT tmc_POPULATED)
-  FetchContent_Populate(tmc)
+if(ENABLE_CUSTOM_SCHEDULERS)
+  file(GLOB_RECURSE BENCH_CUSTOM_SCHEDULERS CONFIGURE_DEPENDS
+       "${CMAKE_CURRENT_SOURCE_DIR}/source/**/custom_*.cpp"
+  )
+  if(BENCH_CUSTOM_SCHEDULERS)
+    target_sources(benchmark PRIVATE ${BENCH_CUSTOM_SCHEDULERS})
+    target_include_directories(benchmark PRIVATE "${CMAKE_SOURCE_DIR}/custom_schedulers")
+    message(STATUS "Custom scheduler benchmarks enabled (${BENCH_CUSTOM_SCHEDULERS})")
+  else()
+    message(STATUS "No custom scheduler benchmark files found")
+  endif()
+else()
+  message(STATUS "Custom scheduler benchers disabled")
 endif()
 
-target_compile_definitions(benchmark PRIVATE TMC_WORK_ITEM=CORO)
-target_compile_definitions(benchmark PRIVATE TMC_PRIORITY_COUNT=1)
-target_compile_definitions(benchmark PRIVATE TMC_USE_HWLOC)
+# TMC - Optional, requires hwloc
 
-# TMC_TRIVIAL_TASK causes asserts to fail in debug builds...
+option(ENABLE_TMC_BENCHMARKS "Enable TMC benchmarks (requires hwloc)" OFF)
 
-# target_compile_definitions(benchmark PRIVATE TMC_TRIVIAL_TASK)
+if(ENABLE_TMC_BENCHMARKS)
+  include(FetchContent)
 
-target_include_directories(benchmark PRIVATE ${tmc_SOURCE_DIR}/include)
+  FetchContent_Declare(
+    tmc
+    GIT_REPOSITORY https://github.com/tzcnt/TooManyCooks.git
+    GIT_TAG df81ef9f493e88df6b7ac08f0490e968866fa10b
+    CONFIGURE_COMMAND "" BUILD_COMMAND ""
+  )
 
-file(GLOB_RECURSE BENCH_tmc CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/source/**/tmc.cpp")
+  FetchContent_GetProperties(tmc)
 
-target_sources(benchmark PRIVATE ${BENCH_tmc} ${CMAKE_CURRENT_SOURCE_DIR}/source/tmc.cpp)
+  if(NOT tmc_POPULATED)
+    FetchContent_Populate(tmc)
+  endif()
+
+  target_compile_definitions(benchmark PRIVATE TMC_WORK_ITEM=CORO)
+  target_compile_definitions(benchmark PRIVATE TMC_PRIORITY_COUNT=1)
+  target_compile_definitions(benchmark PRIVATE TMC_USE_HWLOC)
+
+  # TMC_TRIVIAL_TASK causes asserts to fail in debug builds...
+
+  # target_compile_definitions(benchmark PRIVATE TMC_TRIVIAL_TASK)
+
+  target_include_directories(benchmark PRIVATE ${tmc_SOURCE_DIR}/include)
+
+  file(GLOB_RECURSE BENCH_tmc CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/source/**/tmc.cpp")
+
+  target_sources(benchmark PRIVATE ${BENCH_tmc} ${CMAKE_CURRENT_SOURCE_DIR}/source/tmc.cpp)
+  
+  message(STATUS "TMC benchmarks enabled")
+else()
+  message(STATUS "TMC benchmarks disabled (requires hwloc)")
+endif()
 
 # ---- Coro benchmarks ----
 
