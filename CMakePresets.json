@@ -191,6 +191,7 @@
       "generator": "Ninja",
       "inherits": [
         "dev-mode",
+        "ci-vcpkg",
         "ci-std"
       ],
       "cacheVariables": {
@@ -199,6 +200,12 @@
         "BUILD_BENCHMARKS": "ON",
         "CMAKE_CXX_FLAGS": "-flto=auto -march=native"
       }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "benchmark-nix",
+      "configurePreset": "benchmark-nix"
     }
   ]
 }
