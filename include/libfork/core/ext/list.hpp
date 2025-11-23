@@ -101,7 +101,7 @@ class intrusive_list : impl::immovable<intrusive_list<T>> {
    */
   constexpr auto try_pop_all() noexcept -> node * {
 
-    node *last = m_head.exchange(nullptr, std::memory_order_consume); // acquire?
+    node *last = m_head.exchange(nullptr, std::memory_order_consume);
     node *first = nullptr;
 
     while (last) {

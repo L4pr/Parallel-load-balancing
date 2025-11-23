@@ -79,10 +79,6 @@ inline void busy_work(numa_topology::numa_node<impl::numa_context<busy_vars>> no
 
   my_context->init_worker_and_bind(nullary_function_t{[]() {}}, node); // Notification is a no-op.
 
-  auto *fc = static_cast<impl::full_context *>(my_context->get_underlying());
-  LF_ASSERT(fc);
-
-
   // Wait for everyone to have set up their numa_vars. If this throws an exception then
   // program terminates due to the noexcept marker.
   my_context->shared().latch_start.arrive_and_wait();
@@ -97,37 +93,19 @@ inline void busy_work(numa_topology::numa_node<impl::numa_context<busy_vars>> no
   // -------
 
   while (!my_context->shared().stop.test(std::memory_order_acquire)) {
-    if (task_handle task = fc->pop()) {
-      LF_ASSERT(impl::tls::stack()->empty());
-      auto *fr = std::bit_cast<frame *>(task);
-      LF_ASSERT(fr->load_steals() == 0 && "stolen frame has non-zero steals at entry");
-      resume(task);
-      continue;
-    }
 
     if (submit_handle submissions = my_context->try_pop_all()) {
-      LF_ASSERT(impl::tls::stack()->empty());
-      auto *fr = std::bit_cast<frame *>(submissions);
-      LF_ASSERT(fr->load_steals() == 0 && "stolen frame has non-zero steals at entry");
       resume(submissions);
       continue;
     }
 
     if (task_handle task = my_context->try_steal()) {
-      LF_ASSERT(impl::tls::stack()->empty());
-      auto *fr = std::bit_cast<frame *>(task);
-      LF_ASSERT(fr->load_steals() == 0 && "stolen frame has non-zero steals at entry");
       resume(task);
     }
   }
 
   // Finish up any remaining work.
-  while (task_handle task = fc->pop()) {
-    LF_ASSERT(impl::tls::stack()->empty());
-    resume(task);
-  }
   while (submit_handle submissions = my_context->try_pop_all()) {
-    LF_ASSERT(impl::tls::stack()->empty());
     resume(submissions);
   }
 }
