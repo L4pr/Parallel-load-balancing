@@ -414,7 +414,10 @@ template <dequeable T>
 constexpr auto deque<T>::grow_shared() noexcept -> void {
   std::ptrdiff_t const bottom = m_bottom.load(relaxed);
 
-  std::ptrdiff_t const new_s = (m_osplit + bottom + 1) / 2;
+  std::ptrdiff_t new_s = (m_osplit + bottom + 1) / 2;
+  if (new_s > bottom) {
+    new_s = bottom;
+  }
 
   m_split.store(new_s, release);
   m_osplit = new_s;
@@ -534,7 +537,7 @@ constexpr auto deque<T>::steal() noexcept -> steal_t<T> {
     // as we only return the value if we win the race below guaranteeing we had no race during our
     // read. If we loose the race then 'x' could be corrupt due to read-during-write race but as T
     // is trivially destructible this does not matter.
-    T tmp = m_buf.load(consume)->load(top);
+    T tmp = m_buf.load(acquire)->load(top);
 
     static_assert(std::is_trivially_destructible_v<T>, "concept 'atomicable' should guarantee this already");
 
