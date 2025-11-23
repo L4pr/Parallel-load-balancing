@@ -211,9 +211,9 @@
         "ci-std"
       ],
       "cacheVariables": {
-        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_BUILD_TYPE": "Debug",
         "BUILD_TESTING": "ON",
-        "BUILD_BENCHMARKS": "ON",
+        "BUILD_BENCHMARKS": "OFF",
         "CMAKE_CXX_FLAGS": "-flto=auto -march=native"
       }
     }

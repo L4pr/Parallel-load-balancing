@@ -157,9 +157,6 @@ inline auto lazy_work(numa_topology::numa_node<numa_context<lazy_vars>> node) no
 
   my_context->init_worker_and_bind(std::move(notify), node);
 
-  auto *fc = static_cast<impl::full_context *>(my_context->get_underlying());
-  LF_ASSERT(fc);
-
   // Wait for everyone to have set up their numa_vars. If this throws an exception then
   // program terminates due to the noexcept marker.
   my_context->shared().latch_start.arrive_and_wait();
@@ -204,10 +201,6 @@ wake_up:
   /**
    * First we handle the fast path (work to do) before touching the notifier.
    */
-  if (task_handle task = fc->pop()) {
-    my_context->shared().thief_work_sleep(task, numa_tid);
-    goto wake_up;
-  }
   if (auto *submission = my_context->try_pop_all()) {
     my_context->shared().thief_work_sleep(submission, numa_tid);
     goto wake_up;
@@ -233,11 +226,6 @@ wake_up:
    */
 
   auto key = my_numa_vars.notifier.prepare_wait();
-
-  if (task_handle task = fc->pop()) {
-    my_context->shared().thief_work_sleep(task, numa_tid);
-    goto wake_up;
-  }
 
   if (auto *submission = my_context->try_pop_all()) {
     // Check our private **before** `stop`.
