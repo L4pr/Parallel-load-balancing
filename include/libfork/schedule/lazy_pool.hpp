@@ -157,9 +157,6 @@ inline auto lazy_work(numa_topology::numa_node<numa_context<lazy_vars>> node) no
 
   my_context->init_worker_and_bind(std::move(notify), node);
 
-  auto *fc = static_cast<impl::full_context *>(my_context->get_underlying());
-  LF_ASSERT(fc);
-
   // Wait for everyone to have set up their numa_vars. If this throws an exception then
   // program terminates due to the noexcept marker.
   my_context->shared().latch_start.arrive_and_wait();
