@@ -204,6 +204,10 @@ wake_up:
   /**
    * First we handle the fast path (work to do) before touching the notifier.
    */
+  if (task_handle task = fc->pop()) {
+    my_context->shared().thief_work_sleep(task, numa_tid);
+    goto wake_up;
+  }
   if (auto *submission = my_context->try_pop_all()) {
     my_context->shared().thief_work_sleep(submission, numa_tid);
     goto wake_up;
@@ -229,6 +233,11 @@ wake_up:
    */
 
   auto key = my_numa_vars.notifier.prepare_wait();
+
+  if (task_handle task = fc->pop()) {
+    my_context->shared().thief_work_sleep(task, numa_tid);
+    goto wake_up;
+  }
 
   if (auto *submission = my_context->try_pop_all()) {
     // Check our private **before** `stop`.
