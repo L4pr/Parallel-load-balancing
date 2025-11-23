@@ -50,7 +50,9 @@ patterns = [
 
 for file in patterns:
     # Read the input file as json
-    with open(f"./bench/data/sapphire/v5/csd3.{file}.json") as f:
+    # with open(f"./bench/data/sapphire/v5/csd3.{file}.json") as f:     This is the original line, changed to the line below for testing
+    file = "fib"
+    with open(f"./data/laptop/{file}.json") as f:
         #
         data = json.load(f)
 

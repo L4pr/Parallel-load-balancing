@@ -200,32 +200,12 @@
         "BUILD_BENCHMARKS": "ON",
         "CMAKE_CXX_FLAGS": "-flto=auto -march=native"
       }
-    },
-    {
-      "name": "test-nix",
-      "binaryDir": "${sourceDir}/build/test",
-      "generator": "Ninja",
-      "inherits": [
-        "dev-mode",
-        "ci-vcpkg",
-        "ci-std"
-      ],
-      "cacheVariables": {
-        "CMAKE_BUILD_TYPE": "Release",
-        "BUILD_TESTING": "ON",
-        "BUILD_BENCHMARKS": "ON",
-        "CMAKE_CXX_FLAGS": "-flto=auto -march=native"
-      }
     }
   ],
   "buildPresets": [
     {
       "name": "benchmark-nix",
       "configurePreset": "benchmark-nix"
-    },
-    {
-      "name": "test-nix",
-      "configurePreset": "test-nix"
     }
   ]
 }
