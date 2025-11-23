@@ -470,6 +470,13 @@ constexpr auto deque<T>::push(T const &val) -> void {
 
   std::atomic_thread_fence(release);
   m_bottom.store(bottom + 1, relaxed);
+  
+  // Update split to track bottom, making tasks immediately stealable
+  // This maintains Chase-Lev behavior while supporting Lace's optimizations
+  if (m_osplit == bottom) {
+    m_split.store(bottom + 1, release);
+    m_osplit = bottom + 1;
+  }
 
   if (m_splitreq.load(relaxed)) {
     grow_shared();
@@ -485,6 +492,12 @@ deque<T>::pop(F &&when_empty) noexcept(std::is_nothrow_invocable_v<F>) -> std::i
   std::ptrdiff_t const bottom = m_bottom.load(relaxed) - 1; //
   impl::atomic_ring_buf<T> *buf = m_buf.load(relaxed);      //
   m_bottom.store(bottom, relaxed);                          // Stealers can no longer steal.
+  
+  // Update split to track bottom
+  if (m_osplit == bottom + 1) {
+    m_split.store(bottom, release);
+    m_osplit = bottom;
+  }
 
   impl::thread_fence_seq_cst();
 
@@ -501,12 +514,22 @@ deque<T>::pop(F &&when_empty) noexcept(std::is_nothrow_invocable_v<F>) -> std::i
       if (!m_top.compare_exchange_strong(top, top + 1, seq_cst, relaxed)) {
         // Failed race, thief got the last item.
         m_bottom.store(bottom + 1, relaxed);
+        // Restore split
+        if (m_osplit == bottom) {
+          m_split.store(bottom + 1, release);
+          m_osplit = bottom + 1;
+        }
         if (m_splitreq.load(relaxed)) {
           grow_shared();
         }
         return std::invoke(std::forward<F>(when_empty));
       }
       m_bottom.store(bottom + 1, relaxed);
+      // Restore split
+      if (m_osplit == bottom) {
+        m_split.store(bottom + 1, release);
+        m_osplit = bottom + 1;
+      }
     }
     if (m_splitreq.load(relaxed)) {
       grow_shared();
@@ -516,6 +539,11 @@ deque<T>::pop(F &&when_empty) noexcept(std::is_nothrow_invocable_v<F>) -> std::i
     return buf->load(bottom);
   }
   m_bottom.store(bottom + 1, relaxed);
+  // Restore split
+  if (m_osplit == bottom) {
+    m_split.store(bottom + 1, release);
+    m_osplit = bottom + 1;
+  }
   if (m_splitreq.load(relaxed)) {
     grow_shared();
   }
