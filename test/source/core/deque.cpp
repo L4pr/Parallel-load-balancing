@@ -77,66 +77,66 @@ TEST_CASE("Single thread as stack", "[deque]") {
   REQUIRE(deque.empty());
 }
 
-// TEST_CASE("Single producer, single consumer", "[deque]") {
-//   lf::deque<int> deque;
-//
-//   constexpr int tot = 100;
-//
-//   std::thread thief([&] {
-//     //
-//     int count = 0;
-//
-//     while (count < tot) {
-//       if (auto [err, item] = deque.steal(); err == lf::err::none) {
-//         REQUIRE(item == count++);
-//       } else {
-//         REQUIRE(err == lf::err::empty);
-//       }
-//     }
-//   });
-//
-//   for (int i = 0; i < tot; ++i) {
-//     deque.push(i);
-//   }
-//
-//   thief.join();
-//
-//   REQUIRE(deque.empty());
-// }
+TEST_CASE("Single producer, single consumer", "[deque]") {
+  lf::deque<int> deque;
 
-// TEST_CASE("Single producer, multiple consumer", "[deque]") {
-//   lf::deque<int> deque;
-//
-//   auto &worker = deque;
-//   auto &stealer = deque;
-//
-//   constexpr auto max = 100000;
-//   unsigned int nthreads = std::thread::hardware_concurrency();
-//
-//   std::vector<std::thread> threads;
-//   std::atomic<int> remaining(max);
-//
-//   for (unsigned int i = 0; i < nthreads; ++i) {
-//     threads.emplace_back([&stealer, &remaining]() {
-//       auto &clone = stealer;
-//       while (remaining.load() > 0) {
-//         if (clone.steal()) {
-//           remaining.fetch_sub(1);
-//         }
-//       }
-//     });
-//   }
-//
-//   for (auto i = 0; i < max; ++i) {
-//     worker.push(i);
-//   }
-//
-//   for (auto &thr : threads) {
-//     thr.join();
-//   }
-//
-//   REQUIRE(remaining == 0);
-// }
+  constexpr int tot = 100;
+
+  std::thread thief([&] {
+    //
+    int count = 0;
+
+    while (count < tot) {
+      if (auto [err, item] = deque.steal(); err == lf::err::none) {
+        REQUIRE(item == count++);
+      } else {
+        REQUIRE(err == lf::err::empty);
+      }
+    }
+  });
+
+  for (int i = 0; i < tot; ++i) {
+    deque.push(i);
+  }
+
+  thief.join();
+
+  REQUIRE(deque.empty());
+}
+
+TEST_CASE("Single producer, multiple consumer", "[deque]") {
+  lf::deque<int> deque;
+
+  auto &worker = deque;
+  auto &stealer = deque;
+
+  constexpr auto max = 100000;
+  unsigned int nthreads = std::thread::hardware_concurrency();
+
+  std::vector<std::thread> threads;
+  std::atomic<int> remaining(max);
+
+  for (unsigned int i = 0; i < nthreads; ++i) {
+    threads.emplace_back([&stealer, &remaining]() {
+      auto &clone = stealer;
+      while (remaining.load() > 0) {
+        if (clone.steal()) {
+          remaining.fetch_sub(1);
+        }
+      }
+    });
+  }
+
+  for (auto i = 0; i < max; ++i) {
+    worker.push(i);
+  }
+
+  for (auto &thr : threads) {
+    thr.join();
+  }
+
+  REQUIRE(remaining == 0);
+}
 
 TEST_CASE("Single producer + pop(), multiple consumer", "[deque]") {
 
