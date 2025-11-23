@@ -8,3 +8,8 @@ me_unit=ms   --benchmark_filter="fib"   --benchmark_out_format=json
 
 ``cmake --preset=benchmark-nix``
 
+``cmake --preset=test-nix``
+
+``cmake --build --preset=test-nix``
+
+``./build/test/test/libfork_test``
