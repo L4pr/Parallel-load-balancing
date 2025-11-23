@@ -431,7 +431,7 @@ constexpr auto deque<T>::shrink_shared() noexcept -> void {
   }
 
   ptrdiff_t new_s = (top + split) / 2;
-  m_split.store(new_s, release);
+  m_split.store(new_s, relaxed);  // was release
   m_osplit = new_s;
 
   impl::thread_fence_seq_cst();
@@ -442,7 +442,7 @@ constexpr auto deque<T>::shrink_shared() noexcept -> void {
   }
   if (top > new_s) {
     new_s = (top + split) / 2;
-    m_split.store(new_s, release);
+    m_split.store(new_s, relaxed); // was release
     m_osplit = new_s;
   }
 }

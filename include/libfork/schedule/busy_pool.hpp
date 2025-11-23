@@ -96,10 +96,6 @@ inline void busy_work(numa_topology::numa_node<impl::numa_context<busy_vars>> no
   // -------
 
   while (!my_context->shared().stop.test(std::memory_order_acquire)) {
-    if (task_handle task = fc->pop()) {
-      resume(task);
-      continue;
-    }
 
     if (submit_handle submissions = my_context->try_pop_all()) {
       resume(submissions);
@@ -112,9 +108,6 @@ inline void busy_work(numa_topology::numa_node<impl::numa_context<busy_vars>> no
   }
 
   // Finish up any remaining work.
-  while (task_handle task = fc->pop()) {
-    resume(task);
-  }
   while (submit_handle submissions = my_context->try_pop_all()) {
     resume(submissions);
   }
