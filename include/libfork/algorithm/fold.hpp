@@ -145,7 +145,7 @@ struct fold_overload_impl {
 
         co_await lf::join;
 
-        co_return co_await just(std::move(bop))( //
+        co_return co_await just[std::move(bop)]( //
             *std::move(lhs),                     //
             *std::move(rhs)                      //
         );                                       //

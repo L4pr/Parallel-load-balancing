@@ -201,8 +201,7 @@ struct rise_sweep {
         if constexpr (Ival == interval::mid) {
           // Mid segment has a right sibling so do the fold.
           acc_t acc = acc_t(co_await lf::just(proj)(*beg));
-          // The optimizer sometimes trips-up so we force a bit of unrolling.
-          LF_PRAGMA_UNROLL(8)
+          // Loop unrolling via LF_PRAGMA_UNROLL triggers "ignoring loop annotation" when co_await is present.
           for (++beg; beg != end; ++beg) {
             if constexpr (async_bop) {
               co_await eager_call_outside(&acc, bop)(std::move(acc), co_await lf::just(proj)(*beg));
@@ -222,7 +221,8 @@ struct rise_sweep {
 
         acc_t acc = acc_t(*(out - 1));
 
-        LF_PRAGMA_UNROLL(8)
+        // *Pragma removed*: unrolling a loop that contains co_await leads to "ignoring loop annotation" warnings
+        // LF_PRAGMA_UNROLL(8)
         for (; beg != end; ++beg, ++out) {
           if constexpr (async_bop) {
             co_await eager_call_outside(&acc, bop)(std::move(acc), co_await lf::just(proj)(*beg));
@@ -241,7 +241,8 @@ struct rise_sweep {
         ++beg;
         ++out;
 
-        LF_PRAGMA_UNROLL(8)
+        // *Pragma removed*: unrolling a loop that contains co_await leads to "ignoring loop annotation" warnings
+        // LF_PRAGMA_UNROLL(8)
         for (; beg != end; ++beg, ++out) {
           if constexpr (async_bop) {
             co_await eager_call_outside(&acc, bop)(std::move(acc), co_await lf::just(proj)(*beg));
@@ -360,7 +361,8 @@ struct fall_sweep_impl {
       // The furthest-right chunk has no reduction stored in it so we include it in the scan.
       I last = (Ival == interval::rhs) ? end : beg + size - 1;
 
-      LF_PRAGMA_UNROLL(8)
+      // *Pragma removed*: unrolling a loop that contains co_await leads to "ignoring loop annotation" warnings
+      // LF_PRAGMA_UNROLL(8)
       for (; beg != last; ++beg, ++out) {
         if constexpr (async_bop) {
           co_await eager_call_outside(&acc, bop)(std::move(acc), co_await lf::just(proj)(*beg));
@@ -649,7 +651,7 @@ struct scan_overload {
                                  R &&range,
                                  Bop bop,
                                  Proj proj = {}) LF_STATIC_CONST->task<void> {
-    co_return co_await lf::just(impl::scan_impl{})(
+    co_return co_await lf::just[impl::scan_impl{}](
         std::ranges::begin(range), std::ranges::end(range), std::ranges::begin(range), 1, bop, proj //
     );
   }

@@ -117,5 +117,14 @@ add_executable(coro_bench ${CMAKE_CURRENT_SOURCE_DIR}/source/coroutine/increment
 
 target_link_libraries(coro_bench PRIVATE libfork::libfork benchmark::benchmark_main)
 
+# ---- Lace example ----
+
+add_executable(
+  lace_example
+  "${CMAKE_CURRENT_SOURCE_DIR}/source/lace_example.cpp"
+)
+
+target_link_libraries(lace_example PRIVATE libfork_lace_scheduler)
+
 # ---- End-of-file commands ----
 add_folders(benchmarks)

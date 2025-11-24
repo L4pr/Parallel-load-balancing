@@ -54,7 +54,39 @@ option(LF_COROUTINE_OFFSET "The ABI offset between a coroutine's promise and its
 
 if(LF_COROUTINE_OFFSET)
   target_compile_definitions(libfork_libfork INTERFACE LF_COROUTINE_OFFSET=${LF_COROUTINE_OFFSET})
-include(cmake/dev-mode.cmake)
+endif()
+
+# ---- Lace Scheduler ----
+
+# Create a library for Lace
+add_library(lace STATIC
+    "${CMAKE_CURRENT_SOURCE_DIR}/lace_source/lace.c"
+)
+
+target_include_directories(lace PUBLIC
+    "${CMAKE_CURRENT_SOURCE_DIR}/lace_source"
+)
+
+target_compile_features(lace PUBLIC c_std_11)
+
+find_package(Threads REQUIRED)
+target_link_libraries(lace PRIVATE Threads::Threads)
+
+if(UNIX AND NOT APPLE)
+    target_link_libraries(lace PRIVATE rt)
+endif()
+
+# Create the lace scheduler library
+add_library(libfork_lace_scheduler STATIC
+    "${CMAKE_CURRENT_SOURCE_DIR}/source/lace_scheduler.cpp"
+)
+
+target_link_libraries(libfork_lace_scheduler PUBLIC libfork_libfork)
+target_link_libraries(libfork_lace_scheduler PRIVATE lace)
+
+target_include_directories(libfork_lace_scheduler PUBLIC
+    "${CMAKE_CURRENT_SOURCE_DIR}/include"
+)
 
 # --------------- Optional dependancies---------------
 
@@ -111,7 +143,6 @@ if(NOT libfork_DEV_MODE)
   return()
 elseif(NOT PROJECT_IS_TOP_LEVEL)
   message(AUTHOR_WARNING "Developer mode is intended for developers of libfork")
-endif()
 endif()
 
 include(cmake/dev-mode.cmake)
