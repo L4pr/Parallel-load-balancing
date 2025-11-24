@@ -413,37 +413,35 @@ constexpr auto deque<T>::empty() const noexcept -> bool {
 template <dequeable T>
 constexpr auto deque<T>::grow_shared() noexcept -> void {
   std::ptrdiff_t const bottom = m_bottom.load(relaxed);
+  
+  // Grow shared region using gradual midpoint strategy
+  // Use (osplit + bottom + 1) / 2 to round up, ensuring we make progress
+  std::ptrdiff_t const new_s = (m_osplit + bottom + 1) / 2;
 
-  // std::ptrdiff_t const new_s = (m_osplit + bottom + 1) / 2;   // old
-  std::ptrdiff_t const new_s = bottom;
-
-  m_split.store(new_s, release);
-  m_osplit = new_s;
+  // Only update if there's actually something to share
+  if (new_s > m_osplit) {
+    m_split.store(new_s, release);
+    m_osplit = new_s;
+  }
   m_splitreq.store(false, relaxed);
 }
 
 template <dequeable T>
 constexpr auto deque<T>::shrink_shared() noexcept -> void {
-  ptrdiff_t top = m_top.load(acquire);
-  ptrdiff_t split = m_split.load(relaxed);
+  ptrdiff_t const top = m_top.load(acquire);
+  ptrdiff_t const split = m_split.load(relaxed);
 
-  if (top == split) {
+  // If there's no shared region or it's already minimal, nothing to do
+  if (top >= split) {
     return;
   }
 
-  ptrdiff_t new_s = (top + split) / 2;
-  m_split.store(new_s, relaxed);  // was release
-  m_osplit = new_s;
-
-  impl::thread_fence_seq_cst();
-
-  top = m_top.load(acquire);
-  if (top == split) {
-    return;
-  }
-  if (top > new_s) {
-    new_s = (top + split) / 2;
-    m_split.store(new_s, relaxed); // was release
+  // Shrink to midpoint between top and current split
+  ptrdiff_t const new_s = (top + split) / 2;
+  
+  // Ensure new split is at least at top to maintain invariant
+  if (new_s >= top) {
+    m_split.store(new_s, release);
     m_osplit = new_s;
   }
 }
@@ -493,11 +491,11 @@ deque<T>::pop(F &&when_empty) noexcept(std::is_nothrow_invocable_v<F>) -> std::i
 
   if (top <= bottom) {
     // Non-empty deque
-    // if (m_split.load(relaxed) == bottom + 1) {
-    //   shrink_shared();
-    //
-    //   top = m_top.load(relaxed);
-    // }
+    if (m_split.load(relaxed) == bottom + 1) {
+      shrink_shared();
+      
+      top = m_top.load(relaxed);
+    }
 
     if (m_splitreq.load(relaxed)) {
       grow_shared();
