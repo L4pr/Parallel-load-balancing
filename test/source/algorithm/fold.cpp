@@ -27,6 +27,8 @@
 #include "libfork/algorithm/fold.hpp" // for fold
 #include "libfork/core.hpp"           // for sync_wait, task, just
 #include "libfork/schedule.hpp"       // for busy_pool, lazy_pool, unit_pool
+#include "libfork/schedule/fifo_pool.hpp"
+#include "libfork/schedule/lifo_pool.hpp"
 #include "matrix.hpp"                 // for matrix, operator*, random_vec
 
 // NOLINTBEGIN No linting in tests
@@ -110,23 +112,23 @@ constexpr auto coro_identity = []<typename T>(auto, T &&val) -> task<T &&> {
 
 } // namespace
 
-TEMPLATE_TEST_CASE("fold (reg, reg)", "[algorithm][template]", unit_pool, busy_pool, lazy_pool) {
+TEMPLATE_TEST_CASE("fold (reg, reg)", "[algorithm][template]", unit_pool, busy_pool, lazy_pool, fifo_pool, lifo_pool) {
   test(make_scheduler<TestType>(), sum_reg);
 }
 
-TEMPLATE_TEST_CASE("fold (co, reg)", "[algorithm][template]", unit_pool, busy_pool, lazy_pool) {
+TEMPLATE_TEST_CASE("fold (co, reg)", "[algorithm][template]", unit_pool, busy_pool, lazy_pool, fifo_pool, lifo_pool) {
   test(make_scheduler<TestType>(), sum_coro);
 }
 
-TEMPLATE_TEST_CASE("fold (reg, co)", "[algorithm][template]", unit_pool, busy_pool, lazy_pool) {
+TEMPLATE_TEST_CASE("fold (reg, co)", "[algorithm][template]", unit_pool, busy_pool, lazy_pool, fifo_pool, lifo_pool) {
   test(make_scheduler<TestType>(), sum_reg, coro_identity);
 }
 
-TEMPLATE_TEST_CASE("fold (co, co)", "[algorithm][template]", unit_pool, busy_pool, lazy_pool) {
+TEMPLATE_TEST_CASE("fold (co, co)", "[algorithm][template]", unit_pool, busy_pool, lazy_pool, fifo_pool, lifo_pool) {
   test(make_scheduler<TestType>(), sum_coro, coro_identity);
 }
 
-TEMPLATE_TEST_CASE("fold non-commuting", "[algorithm][template]", unit_pool, busy_pool, lazy_pool) {
+TEMPLATE_TEST_CASE("fold non-commuting", "[algorithm][template]", unit_pool, busy_pool, lazy_pool, fifo_pool, lifo_pool) {
 
   auto sch = make_scheduler<TestType>();
 

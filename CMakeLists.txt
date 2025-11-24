@@ -54,7 +54,7 @@ option(LF_COROUTINE_OFFSET "The ABI offset between a coroutine's promise and its
 
 if(LF_COROUTINE_OFFSET)
   target_compile_definitions(libfork_libfork INTERFACE LF_COROUTINE_OFFSET=${LF_COROUTINE_OFFSET})
-endif()
+include(cmake/dev-mode.cmake)
 
 # --------------- Optional dependancies---------------
 
@@ -111,6 +111,7 @@ if(NOT libfork_DEV_MODE)
   return()
 elseif(NOT PROJECT_IS_TOP_LEVEL)
   message(AUTHOR_WARNING "Developer mode is intended for developers of libfork")
+endif()
 endif()
 
 include(cmake/dev-mode.cmake)
