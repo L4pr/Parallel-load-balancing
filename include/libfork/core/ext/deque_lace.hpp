@@ -489,9 +489,10 @@ deque<T>::pop(F &&when_empty) noexcept(std::is_nothrow_invocable_v<F>) -> std::i
 
   impl::thread_fence_seq_cst();
 
-  std::ptrdiff_t top = m_top.load(relaxed);
+  std::ptrdiff_t split = m_split.load(relaxed);
 
-  if (top <= bottom) {
+
+  if (split <= bottom) {
     // Non-empty deque
     // if (m_split.load(relaxed) == bottom + 1) {
     //   shrink_shared();
@@ -503,15 +504,15 @@ deque<T>::pop(F &&when_empty) noexcept(std::is_nothrow_invocable_v<F>) -> std::i
       grow_shared();
     }
 
-    if (top == bottom) {
-      // The last item could get stolen, by a stealer that loaded bottom before our write above.
-      if (!m_top.compare_exchange_strong(top, top + 1, seq_cst, relaxed)) {
-        // Failed race, thief got the last item.
-        m_bottom.store(bottom + 1, relaxed);
-        return std::invoke(std::forward<F>(when_empty));
-      }
-      m_bottom.store(bottom + 1, relaxed);
-    }
+    //if (top == bottom) {
+    //  // The last item could get stolen, by a stealer that loaded bottom before our write above.
+    //  if (!m_top.compare_exchange_strong(top, top + 1, seq_cst, relaxed)) {
+    //    // Failed race, thief got the last item.
+    //    m_bottom.store(bottom + 1, relaxed);
+    //    return std::invoke(std::forward<F>(when_empty));
+    //  }
+    //  m_bottom.store(bottom + 1, relaxed);
+    //}
     // Can delay load until after acquiring slot as only this thread can push(),
     // This load is not required to be atomic as we are the exclusive writer.
     return buf->load(bottom);
