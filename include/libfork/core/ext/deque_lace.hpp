@@ -359,7 +359,7 @@ class deque : impl::immovable<deque<T>> {
    * If there are not enough private tasks to share, this function is a no-op.
    * Must only be called by the owner thread of the deque.
    */
-  constexpr auto grow_shared() noexcept -> void;
+  constexpr auto grow_shared(std::ptrdiff_t bottom) noexcept -> void;
   /**
    * @brief Shrink the shared portion of the deque.
    *
@@ -411,11 +411,11 @@ constexpr auto deque<T>::empty() const noexcept -> bool {
 }
 
 template <dequeable T>
-constexpr auto deque<T>::grow_shared() noexcept -> void {
-  std::ptrdiff_t const bottom = m_bottom.load(relaxed);
+constexpr auto deque<T>::grow_shared(std::ptrdiff_t bottom) noexcept -> void {
+  // std::ptrdiff_t const bottom = m_bottom.load(relaxed);
 
-  // std::ptrdiff_t const new_s = (m_osplit + bottom + 1) / 2;   // old
-  std::ptrdiff_t const new_s = bottom;
+  std::ptrdiff_t const new_s = (m_osplit + bottom) / 2;   // old
+  // std::ptrdiff_t const new_s = bottom;
 
   m_split.store(new_s, release);
   m_osplit = new_s;
@@ -424,27 +424,20 @@ constexpr auto deque<T>::grow_shared() noexcept -> void {
 
 template <dequeable T>
 constexpr auto deque<T>::shrink_shared() noexcept -> void {
-  ptrdiff_t top = m_top.load(acquire);
-  ptrdiff_t split = m_split.load(relaxed);
+  impl::thread_fence_seq_cst();
 
-  if (top == split) {
-    return;
-  }
+  const ptrdiff_t top = m_top.load(acquire);
 
-  ptrdiff_t new_s = (top + split) / 2;
-  m_split.store(new_s, relaxed);  // was release
-  m_osplit = new_s;
+  m_split.store(top, relaxed);
+  m_osplit = top;
 
   impl::thread_fence_seq_cst();
 
-  top = m_top.load(acquire);
-  if (top == split) {
-    return;
-  }
-  if (top > new_s) {
-    new_s = (top + split) / 2;
-    m_split.store(new_s, relaxed); // was release
-    m_osplit = new_s;
+  std::ptrdiff_t real_top = m_top.load(acquire);
+
+  if (real_top > top) {
+    m_split.store(real_top, relaxed);
+    m_osplit = real_top;
   }
 }
 
@@ -473,7 +466,7 @@ constexpr auto deque<T>::push(T const &val) -> void {
   m_bottom.store(bottom + 1, relaxed);
 
   if (m_splitreq.load(relaxed)) {
-    grow_shared();
+    grow_shared(bottom + 1);
   }
 }
 
@@ -483,40 +476,26 @@ template <std::invocable F>
 constexpr auto
 deque<T>::pop(F &&when_empty) noexcept(std::is_nothrow_invocable_v<F>) -> std::invoke_result_t<F> {
 
-  std::ptrdiff_t const bottom = m_bottom.load(relaxed) - 1; //
-  impl::atomic_ring_buf<T> *buf = m_buf.load(relaxed);      //
-  m_bottom.store(bottom, relaxed);                          // Stealers can no longer steal.
-
-  impl::thread_fence_seq_cst();
+  std::ptrdiff_t const bottom = m_bottom.load(relaxed) - 1;
+  impl::atomic_ring_buf<T> *buf = m_buf.load(relaxed);
+  m_bottom.store(bottom, relaxed);
 
   std::ptrdiff_t split = m_split.load(relaxed);
 
-
-  if (split <= bottom) {
-    // Non-empty deque
-    // if (m_split.load(relaxed) == bottom + 1) {
-    //   shrink_shared();
-    //
-    //   top = m_top.load(relaxed);
-    // }
-
+  if (bottom >= m_osplit) {
     if (m_splitreq.load(relaxed)) {
-      grow_shared();
+      grow_shared(bottom);
     }
 
-    //if (top == bottom) {
-    //  // The last item could get stolen, by a stealer that loaded bottom before our write above.
-    //  if (!m_top.compare_exchange_strong(top, top + 1, seq_cst, relaxed)) {
-    //    // Failed race, thief got the last item.
-    //    m_bottom.store(bottom + 1, relaxed);
-    //    return std::invoke(std::forward<F>(when_empty));
-    //  }
-    //  m_bottom.store(bottom + 1, relaxed);
-    //}
-    // Can delay load until after acquiring slot as only this thread can push(),
-    // This load is not required to be atomic as we are the exclusive writer.
     return buf->load(bottom);
   }
+
+  shrink_shared();
+
+  if (bottom >= m_osplit) {
+    return buf->load(bottom);
+  }
+
   m_bottom.store(bottom + 1, relaxed);
   return std::invoke(std::forward<F>(when_empty));
 }
