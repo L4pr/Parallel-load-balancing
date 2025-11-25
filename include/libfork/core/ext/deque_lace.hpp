@@ -480,7 +480,7 @@ deque<T>::pop(F &&when_empty) noexcept(std::is_nothrow_invocable_v<F>) -> std::i
   impl::atomic_ring_buf<T> *buf = m_buf.load(relaxed);
   m_bottom.store(bottom, relaxed);
 
-  std::ptrdiff_t split = m_split.load(relaxed);
+  // std::ptrdiff_t split = m_split.load(relaxed);
 
   if (bottom >= m_osplit) {
     if (m_splitreq.load(relaxed)) {
@@ -503,7 +503,7 @@ deque<T>::pop(F &&when_empty) noexcept(std::is_nothrow_invocable_v<F>) -> std::i
 template <dequeable T>
 constexpr auto deque<T>::steal() noexcept -> steal_t<T> {
   std::ptrdiff_t top = m_top.load(acquire);
-  impl::thread_fence_seq_cst();
+  // impl::thread_fence_seq_cst();
   std::ptrdiff_t const split = m_split.load(acquire);
 
   if (top < split) {
