@@ -9,219 +9,131 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-#include <algorithm>   // for max
-#include <atomic>      // for atomic, atomic_thread_fence, memory_order, memo...
-#include <bit>         // for has_single_bit
-#include <concepts>    // for convertible_to, invocable, default_initializable
-#include <cstddef>     // for ptrdiff_t, size_t
-#include <functional>  // for invoke
-#include <memory>      // for unique_ptr, make_unique
-#include <optional>    // for optional
-#include <type_traits> // for invoke_result_t
-#include <utility>     // for addressof, forward, exchange
-#include <vector>      // for vector
-#include <version>     // for ptrdiff_t
+#include <atomic>
+#include <concepts>
+#include <cstddef>
+#include <memory>
+#include <optional>
+#include <type_traits>
+#include <utility>
+#include <new>
+#include <limits>
+#include <stdexcept>
+#include <cstdlib> // for abort
 
 #include "libfork/core/impl/atomics.hpp" // for thread_fence_seq_cst
 #include "libfork/core/impl/utility.hpp" // for k_cache_line, immovable
-#include "libfork/core/macro.hpp"        // for LF_ASSERT, LF_STATIC_CALL, LF_STATIC_CONST
+#include "libfork/core/macro.hpp"        // for LF_ASSERT, etc
 
-/**
- * @file deque.hpp
- *
- * @brief A production-quality implementation of the Chase-Lev lock-free SPMC deque.
- */
+// Platform headers for mmap/VirtualAlloc
+#if defined(_WIN32) || defined(_WIN64)
+    #define NOMINMAX
+    #include <windows.h>
+#else
+    #include <sys/mman.h>
+#endif
 
 namespace lf {
 
+// Virtual memory functions
+namespace impl {
+    inline auto allocate_virtual(std::size_t bytes) -> void* {
+    #if defined(_WIN32) || defined(_WIN64)
+        void* ptr = VirtualAlloc(nullptr, bytes, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+        return ptr;
+    #else
+        void* ptr = mmap(nullptr, bytes, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+        return (ptr == MAP_FAILED) ? nullptr : ptr;
+    #endif
+    }
+
+    inline auto deallocate_virtual(void* ptr, std::size_t bytes) -> void {
+    #if defined(_WIN32) || defined(_WIN64)
+        VirtualFree(ptr, 0, MEM_RELEASE);
+    #else
+        munmap(ptr, bytes);
+    #endif
+    }
+}
+
 inline namespace ext {
 
-/**
- * @brief Verify a type is suitable for use with `std::atomic`
- *
- * This requires a `TriviallyCopyable` type satisfying both `CopyConstructible` and `CopyAssignable`.
- */
 template <typename T>
-concept atomicable = std::is_trivially_copyable_v<T> && //
-                     std::is_copy_constructible_v<T> && //
-                     std::is_move_constructible_v<T> && //
-                     std::is_copy_assignable_v<T> &&    //
-                     std::is_move_assignable_v<T>;      //
+concept atomicable = std::is_trivially_copyable_v<T> &&
+                     std::is_copy_constructible_v<T> &&
+                     std::is_move_constructible_v<T> &&
+                     std::is_copy_assignable_v<T> &&
+                     std::is_move_assignable_v<T>;
 
-/**
- * @brief A concept that verifies a type is lock-free when used with `std::atomic`.
- */
 template <typename T>
 concept lock_free = atomicable<T> && std::atomic<T>::is_always_lock_free;
 
-/**
- * @brief Test is a type is suitable for use with `lf::deque`.
- *
- * This requires it to be `lf::ext::lock_free` and `std::default_initializable`.
- */
 template <typename T>
 concept dequeable = lock_free<T> && std::default_initializable<T>;
 
-} // namespace ext
-
-namespace impl {
-
-/**
- * @brief A basic wrapper around a c-style array that provides modulo load/stores.
- *
- * This class is designed for internal use only. It provides a c-style API that is
- * used efficiently by deque for low level atomic operations.
- *
- * @tparam T The type of the elements in the array.
- */
-template <dequeable T>
-struct atomic_ring_buf {
-  /**
-   * @brief Construct a new ring buff object
-   *
-   * @param cap The capacity of the buffer, MUST be a power of 2.
-   */
-  constexpr explicit atomic_ring_buf(std::ptrdiff_t cap) : m_cap{cap}, m_mask{cap - 1} {
-    LF_ASSERT(cap > 0 && std::has_single_bit(static_cast<std::size_t>(cap)));
-  }
-  /**
-   * @brief Get the capacity of the buffer.
-   */
-  [[nodiscard]] constexpr auto capacity() const noexcept -> std::ptrdiff_t { return m_cap; }
-  /**
-   * @brief Store ``val`` at ``index % this->capacity()``.
-   */
-  constexpr auto store(std::ptrdiff_t index, T const &val) noexcept -> void {
-    LF_ASSERT(index >= 0);
-    (m_buf.get() + (index & m_mask))->store(val, std::memory_order_relaxed); // NOLINT Avoid cast.
-  }
-  /**
-   * @brief Load value at ``index % this->capacity()``.
-   */
-  [[nodiscard]] constexpr auto load(std::ptrdiff_t index) const noexcept -> T {
-    LF_ASSERT(index >= 0);
-    return (m_buf.get() + (index & m_mask))->load(std::memory_order_relaxed); // NOLINT Avoid cast.
-  }
-  /**
-   * @brief Copies elements in range ``[bottom, top)`` into a new ring buffer.
-   *
-   * This function allocates a new buffer and returns a pointer to it.
-   * The caller is responsible for deallocating the memory.
-   *
-   * @param bot The bottom of the range to copy from (inclusive).
-   * @param top The top of the range to copy from (exclusive).
-   */
-  [[nodiscard]] constexpr auto resize(std::ptrdiff_t bot, std::ptrdiff_t top) const -> atomic_ring_buf<T> * {
-
-    auto *ptr = new atomic_ring_buf{2 * m_cap}; // NOLINT
-
-    for (std::ptrdiff_t i = top; i != bot; ++i) {
-      ptr->store(i, load(i));
-    }
-
-    return ptr;
-  }
-
- private:
-  /**
-   * @brief An array of atomic elements.
-   */
-  using array_t = std::atomic<T>[]; // NOLINT
-  /**
-   * @brief Capacity of the buffer.
-   */
-  std::ptrdiff_t m_cap;
-  /**
-   * @brief Bit mask to perform modulo capacity operations.
-   */
-  std::ptrdiff_t m_mask;
-
-#ifdef __cpp_lib_smart_ptr_for_overwrite
-  std::unique_ptr<array_t> m_buf = std::make_unique_for_overwrite<array_t>(static_cast<std::size_t>(m_cap));
-#else
-  std::unique_ptr<array_t> m_buf = std::make_unique<array_t>(static_cast<std::size_t>(m_cap));
-#endif
-};
-
-} // namespace impl
-
-inline namespace ext {
-
-/**
- * @brief Error codes for ``deque`` 's ``steal()`` operation.
- */
 enum class err : int {
-  /**
-   * @brief The ``steal()`` operation succeeded.
-   */
   none = 0,
-  /**
-   * @brief  Lost the ``steal()`` race hence, the ``steal()`` operation failed.
-   */
   lost,
-  /**
-   * @brief The deque is empty and hence, the ``steal()`` operation failed.
-   */
   empty,
 };
 
 /**
- * @brief The return type of a `lf::deque` `steal()` operation.
+ * @brief The return type of `lf::deque` `steal()` operation.
  *
  * This type is suitable for structured bindings. We return a custom type instead of a
  * `std::optional` to allow for more information to be returned as to why a steal may fail.
  */
 template <typename T>
 struct steal_t {
-  /**
-   * @brief Check if the operation succeeded.
-   */
-  [[nodiscard]] constexpr explicit operator bool() const noexcept { return code == err::none; }
-  /**
-   * @brief Get the value like ``std::optional``.
-   *
-   * Requires ``code == err::none`` .
-   */
-  [[nodiscard]] constexpr auto operator*() noexcept -> T & {
-    LF_ASSERT(code == err::none);
-    return val;
-  }
-  /**
-   * @brief Get the value like ``std::optional``.
-   *
-   * Requires ``code == err::none`` .
-   */
-  [[nodiscard]] constexpr auto operator*() const noexcept -> T const & {
-    LF_ASSERT(code == err::none);
-    return val;
-  }
-  /**
-   * @brief Get the value ``like std::optional``.
-   *
-   * Requires ``code == err::none`` .
-   */
-  [[nodiscard]] constexpr auto operator->() noexcept -> T * {
-    LF_ASSERT(code == err::none);
-    return std::addressof(val);
-  }
-  /**
-   * @brief Get the value ``like std::optional``.
-   *
-   * Requires ``code == err::none`` .
-   */
-  [[nodiscard]] constexpr auto operator->() const noexcept -> T const * {
-    LF_ASSERT(code == err::none);
-    return std::addressof(val);
-  }
+    /**
+     * @brief Check if the operation succeeded.
+     */
+    [[nodiscard]] constexpr explicit operator bool() const noexcept { return code == err::none; }
+    /**
+     * @brief Get the value like ``std::optional``.
+     *
+     * Requires ``code == err::none`` .
+     */
+    [[nodiscard]] constexpr auto operator*() noexcept -> T & {
+        LF_ASSERT(code == err::none);
+        return val;
+    }
+    /**
+     * @brief Get the value like ``std::optional``.
+     *
+     * Requires ``code == err::none`` .
+     */
+    [[nodiscard]] constexpr auto operator*() const noexcept -> T const & {
+        LF_ASSERT(code == err::none);
+        return val;
+    }
+    /**
+     * @brief Get the value ``like std::optional``.
+     *
+     * Requires ``code == err::none`` .
+     */
+    [[nodiscard]] constexpr auto operator->() noexcept -> T * {
+        LF_ASSERT(code == err::none);
+        return std::addressof(val);
+    }
+    /**
+     * @brief Get the value ``like std::optional``.
+     *
+     * Requires ``code == err::none`` .
+     */
+    [[nodiscard]] constexpr auto operator->() const noexcept -> T const * {
+        LF_ASSERT(code == err::none);
+        return std::addressof(val);
+    }
 
-  /**
-   * @brief The error code of the ``steal()`` operation.
-   */
-  err code;
-  /**
-   * @brief The value stolen from the deque, Only valid if ``code == err::stolen``.
-   */
-  T val;
+    /**
+     * @brief The error code of the ``steal()`` operation.
+     */
+    err code;
+    /**
+     * @brief The value stolen from the deque, Only valid if ``code == err::stolen``.
+     */
+    T val;
 };
 
 /**
@@ -229,309 +141,203 @@ struct steal_t {
  */
 template <typename T>
 struct return_nullopt {
-  /**
-   * @brief Returns ``std::nullopt``.
-   */
-  LF_STATIC_CALL constexpr auto operator()() LF_STATIC_CONST noexcept -> std::optional<T> { return {}; }
+    /**
+     * @brief Returns ``std::nullopt``.
+     */
+    LF_STATIC_CALL constexpr auto operator()() LF_STATIC_CONST noexcept -> std::optional<T> { return {}; }
 };
 
-/**
- * @brief An unbounded lock-free single-producer multiple-consumer work-stealing deque.
- *
- * \rst
- *
- * Implements the "Chase-Lev" deque described in the papers, `"Dynamic Circular Work-Stealing deque"
- * <https://doi.org/10.1145/1073970.1073974>`_ and `"Correct and Efficient Work-Stealing for Weak
- * Memory Models" <https://doi.org/10.1145/2442516.2442524>`_.
- *
- * Only the deque owner can perform ``pop()`` and ``push()`` operations where the deque behaves
- * like a LIFO stack. Others can (only) ``steal()`` data from the deque, they see a FIFO deque.
- * All threads must have finished using the deque before it is destructed.
- *
- *
- * Example:
- *
- * .. include:: ../../../test/source/core/deque.cpp
- *    :code:
- *    :start-after: // !BEGIN-EXAMPLE
- *    :end-before: // !END-EXAMPLE
- *
- * \endrst
- *
- * @tparam T The type of the elements in the deque.
- */
+struct TopSplit {
+    uint32_t top;
+    uint32_t split;
+};
+
+union PackedIndex {
+    uint64_t whole;
+    TopSplit parts;
+};
+
 template <dequeable T>
 class deque : impl::immovable<deque<T>> {
-
-  static constexpr std::ptrdiff_t k_default_capacity = 1024;
-  static constexpr std::size_t k_garbage_reserve = 64;
+  static constexpr std::size_t k_cache_line = 128;
+  static constexpr std::size_t k_default_cap = 1 << 20;
 
  public:
-  /**
-   * @brief The type of the elements in the deque.
-   */
   using value_type = T;
-  /**
-   * @brief Construct a new empty deque object.
-   */
-  constexpr deque() : deque(k_default_capacity) {}
-  /**
-   * @brief Construct a new empty deque object.
-   *
-   * @param cap The capacity of the deque (must be a power of 2).
-   */
-  constexpr explicit deque(std::ptrdiff_t cap);
-  /**
-   * @brief Get the number of elements in the deque.
-   */
-  [[nodiscard]] constexpr auto size() const noexcept -> std::size_t;
-  /**
-   * @brief Get the number of elements in the deque as a signed integer.
-   */
-  [[nodiscard]] constexpr auto ssize() const noexcept -> ptrdiff_t;
-  /**
-   * @brief Get the capacity of the deque.
-   */
-  [[nodiscard]] constexpr auto capacity() const noexcept -> ptrdiff_t;
-  /**
-   * @brief Check if the deque is empty.
-   */
-  [[nodiscard]] constexpr auto empty() const noexcept -> bool;
-  /**
-   * @brief Push an item into the deque.
-   *
-   * Only the owner thread can insert an item into the deque.
-   * This operation can trigger the deque to resize if more space is required.
-   * This may throw if an allocation is required and then fails.
-   *
-   * @param val Value to add to the deque.
-   */
-  constexpr void push(T const &val);
-  /**
-   * @brief Pop an item from the deque.
-   *
-   * Only the owner thread can pop out an item from the deque. If the buffer is empty calls `when_empty` and
-   * returns the result. By default, `when_empty` is a no-op that returns a null `std::optional<T>`.
-   */
+
+  constexpr deque() : deque(k_default_cap) {}
+
+  explicit deque(const std::size_t cap):
+    m_mask(static_cast<std::ptrdiff_t>(cap) - 1),
+    m_capacity(static_cast<std::ptrdiff_t>(cap)) {
+
+      if (cap > static_cast<std::size_t>(std::numeric_limits<std::ptrdiff_t>::max())) {
+          throw std::length_error("Capacity too large");
+      }
+      if ((cap & (cap - 1)) != 0) {
+          abort();
+      }
+
+      const std::size_t bytes = sizeof(std::atomic<T>) * cap;
+      void* raw = impl::allocate_virtual(bytes);
+      if (!raw) throw std::bad_alloc();
+
+      m_array = static_cast<std::atomic<T>*>(raw);
+
+      m_packed.store(0, relaxed);
+      m_bottom.store(0, relaxed);
+      m_splitreq.store(false, relaxed);
+      m_osplit = 0;
+  }
+
+  ~deque() noexcept {
+      if (m_array) {
+          impl::deallocate_virtual(m_array, sizeof(std::atomic<T>) * static_cast<std::size_t>(m_capacity));
+      }
+  }
+
+  // --- Basic Accessors ---
+
+  [[nodiscard]] constexpr auto size() const noexcept -> std::size_t {
+      return static_cast<std::size_t>(ssize());
+  }
+
+  [[nodiscard]] constexpr auto ssize() const noexcept -> std::ptrdiff_t {
+      std::ptrdiff_t const bottom = m_bottom.load(relaxed);
+      PackedIndex p { .whole = m_packed.load(relaxed) };
+      return std::max(bottom - static_cast<std::ptrdiff_t>(p.parts.top), std::ptrdiff_t{0});
+  }
+
+  [[nodiscard]] constexpr auto capacity() const noexcept -> std::ptrdiff_t {
+      return m_capacity;
+  }
+
+  [[nodiscard]] constexpr auto empty() const noexcept -> bool {
+      std::ptrdiff_t const bottom = m_bottom.load(relaxed);
+      PackedIndex p { .whole = m_packed.load(relaxed) };
+      return p.parts.top >= bottom;
+  }
+
+  constexpr void push(T const &val) noexcept {
+      std::ptrdiff_t const bottom = m_bottom.load(relaxed);
+      (m_array + mask_index(bottom))->store(val, relaxed);
+
+      std::atomic_thread_fence(release);
+      m_bottom.store(bottom + 1, relaxed);
+
+      if (m_splitreq.load(relaxed)) {
+          grow_shared(bottom + 1);
+      }
+  }
+
   template <std::invocable F = return_nullopt<T>>
     requires std::convertible_to<T, std::invoke_result_t<F>>
-  constexpr auto pop(F &&when_empty = {}) noexcept(std::is_nothrow_invocable_v<F>) -> std::invoke_result_t<F>;
+  constexpr auto pop(F &&when_empty = {}) noexcept(std::is_nothrow_invocable_v<F>) -> std::invoke_result_t<F> {
 
-  /**
-   * @brief Steal an item from the deque.
-   *
-   * Any threads can try to steal an item from the deque. This operation can fail if the deque is
-   * empty or if another thread simultaneously stole an item from the deque.
-   */
-  [[nodiscard]] constexpr auto steal() noexcept -> steal_t<T>;
+      const std::ptrdiff_t bottom = m_bottom.load(relaxed) - 1;
+      m_bottom.store(bottom, relaxed);
 
-  /**
-   * @brief Destroy the deque object.
-   *
-   * All threads must have finished using the deque before it is destructed.
-   */
-  constexpr ~deque() noexcept;
+      if (bottom >= m_osplit) {
+          return (m_array + mask_index(bottom))->load(relaxed);
+      }
+
+      if (shrink_shared(bottom)) {
+          return (m_array + mask_index(bottom))->load(relaxed);
+      }
+
+      m_bottom.store(bottom + 1, relaxed);
+      return std::invoke(std::forward<F>(when_empty));
+  }
+
+  [[nodiscard]] constexpr auto steal() noexcept -> steal_t<T> {
+      PackedIndex old_p { .whole = m_packed.load(acquire) };
+      impl::thread_fence_seq_cst();
+
+      if (old_p.parts.top < old_p.parts.split) {
+          T tmp = (m_array + mask_index(old_p.parts.top))->load(relaxed);
+
+          PackedIndex new_p = old_p;
+          new_p.parts.top++;
+
+          if (!m_packed.compare_exchange_strong(old_p.whole, new_p.whole, seq_cst, relaxed)) {
+              return {.code = err::lost, .val = {}};
+          }
+          return {.code = err::none, .val = tmp};
+      }
+
+      std::ptrdiff_t const bottom = m_bottom.load(acquire);
+
+      if (old_p.parts.top < bottom && !m_splitreq.load(relaxed)) {
+          m_splitreq.store(true, relaxed);
+      }
+
+      return {.code = err::empty, .val = {}};
+  }
 
  private:
-  alignas(impl::k_cache_line) std::atomic<std::ptrdiff_t> m_top;
-  alignas(impl::k_cache_line) std::atomic<std::ptrdiff_t> m_bottom;
-  alignas(impl::k_cache_line) std::atomic<std::ptrdiff_t> m_split;
-  alignas(impl::k_cache_line) std::atomic<impl::atomic_ring_buf<T> *> m_buf;
-  std::vector<std::unique_ptr<impl::atomic_ring_buf<T>>> m_garbage;
-  alignas(impl::k_cache_line) std::atomic<bool> m_splitreq;
-  std::ptrdiff_t m_osplit;                              // owner-local copy of split
+  constexpr auto grow_shared(const std::ptrdiff_t bottom) noexcept -> void {
+      std::ptrdiff_t const new_s = (m_osplit + bottom) / 2;
 
-  // Convenience aliases.
+      PackedIndex old_p { .whole = m_packed.load(relaxed) };
+      PackedIndex new_p;
+      do {
+          new_p = old_p;
+          new_p.parts.split = static_cast<uint32_t>(new_s);
+      } while (!m_packed.compare_exchange_weak(old_p.whole, new_p.whole, release, relaxed));
+
+      m_osplit = new_s;
+      m_splitreq.store(false, relaxed);
+  }
+
+  constexpr auto shrink_shared(const std::ptrdiff_t bottom) noexcept -> bool {
+      PackedIndex old_p { .whole = m_packed.load(relaxed) };
+
+      uint32_t top = old_p.parts.top;
+      uint32_t split = old_p.parts.split;
+
+      if (top == split) return false;
+
+      uint32_t new_split_val = (split + top) / 2;
+      if (new_split_val == split) new_split_val = top;
+
+      PackedIndex new_p;
+      do {
+          new_p = old_p;
+          new_p.parts.split = new_split_val;
+      } while (!m_packed.compare_exchange_weak(old_p.whole, new_p.whole, relaxed, relaxed));
+
+      m_osplit = new_split_val;
+
+      impl::thread_fence_seq_cst();
+
+      PackedIndex fresh_p { .whole = m_packed.load(relaxed) };
+
+      if (fresh_p.parts.top > new_split_val) {
+          m_osplit = fresh_p.parts.top;
+      }
+
+      return bottom >= m_osplit;
+  }
+
+  [[nodiscard]] std::size_t mask_index(std::ptrdiff_t idx) const noexcept {
+      return static_cast<std::size_t>(idx) & static_cast<std::size_t>(m_mask);
+  }
+
+  std::atomic<T>* m_array;
+  const std::ptrdiff_t m_mask;
+  const std::ptrdiff_t m_capacity;
+
+  alignas(k_cache_line) std::atomic<uint64_t> m_packed;
+  alignas(k_cache_line) std::atomic<bool> m_splitreq;
+  alignas(k_cache_line) std::atomic<std::ptrdiff_t> m_bottom;
+  std::ptrdiff_t m_osplit;
+
+  // Convenience aliases
   static constexpr std::memory_order relaxed = std::memory_order_relaxed;
-  static constexpr std::memory_order consume = std::memory_order_consume;
   static constexpr std::memory_order acquire = std::memory_order_acquire;
   static constexpr std::memory_order release = std::memory_order_release;
   static constexpr std::memory_order seq_cst = std::memory_order_seq_cst;
-
-  /**
-   * @brief Grow the shared portion of the deque.
-   *
-   * Moves the split index towards the bottom/head index to expose more of the
-   * owner’s private tasks to thieves. This is typically called by the owning
-   * thread when there is a pending request to share more work (e.g. after
-   * other workers failed to steal and set a flag).
-   *
-   * If there are not enough private tasks to share, this function is a no-op.
-   * Must only be called by the owner thread of the deque.
-   */
-  constexpr auto grow_shared(std::ptrdiff_t bottom) noexcept -> void;
-  /**
-   * @brief Shrink the shared portion of the deque.
-   *
-   * Moves the split index towards the top/tail index to reduce the size of the
-   * shared region and keep more tasks private to the owner. This is used when
-   * the shared region has grown large compared to the amount of work, and
-   * includes the necessary synchronization to avoid races with concurrent
-   * steal operations.
-   *
-   * If the shared region is not large enough to shrink safely, this function
-   * is a no-op. Must only be called by the owner thread of the deque.
-   */
-  constexpr auto shrink_shared() noexcept -> void;
 };
-
-template <dequeable T>
-constexpr deque<T>::deque(std::ptrdiff_t cap)
-    : m_top(0),
-      m_bottom(0),
-      m_split(0),
-      m_buf(new impl::atomic_ring_buf<T>{cap}),
-      m_splitreq(false),
-      m_osplit(0) {
-  m_garbage.reserve(k_garbage_reserve);
-}
-
-template <dequeable T>
-constexpr auto deque<T>::size() const noexcept -> std::size_t {
-  return static_cast<std::size_t>(ssize());
-}
-
-template <dequeable T>
-constexpr auto deque<T>::ssize() const noexcept -> std::ptrdiff_t {
-  ptrdiff_t const bottom = m_bottom.load(relaxed);
-  ptrdiff_t const top = m_top.load(relaxed);
-  return std::max(bottom - top, ptrdiff_t{0});
-}
-
-template <dequeable T>
-constexpr auto deque<T>::capacity() const noexcept -> ptrdiff_t {
-  return m_buf.load(relaxed)->capacity();
-}
-
-template <dequeable T>
-constexpr auto deque<T>::empty() const noexcept -> bool {
-  ptrdiff_t const bottom = m_bottom.load(relaxed);
-  ptrdiff_t const top = m_top.load(relaxed);
-  return top >= bottom;
-}
-
-template <dequeable T>
-constexpr auto deque<T>::grow_shared(std::ptrdiff_t bottom) noexcept -> void {
-  // std::ptrdiff_t const bottom = m_bottom.load(relaxed);
-
-  std::ptrdiff_t const new_s = (m_osplit + bottom) / 2;   // old
-  // std::ptrdiff_t const new_s = bottom;
-
-  m_split.store(new_s, release);
-  m_osplit = new_s;
-  m_splitreq.store(false, relaxed);
-}
-
-template <dequeable T>
-constexpr auto deque<T>::shrink_shared() noexcept -> void {
-  impl::thread_fence_seq_cst();
-
-  const ptrdiff_t top = m_top.load(acquire);
-
-  m_split.store(top, relaxed);
-  m_osplit = top;
-
-  impl::thread_fence_seq_cst();
-
-  std::ptrdiff_t real_top = m_top.load(acquire);
-
-  if (real_top > top) {
-    m_split.store(real_top, relaxed);
-    m_osplit = real_top;
-  }
-}
-
-template <dequeable T>
-constexpr auto deque<T>::push(T const &val) -> void {
-  std::ptrdiff_t const bottom = m_bottom.load(relaxed);
-  std::ptrdiff_t const top = m_top.load(acquire);
-  impl::atomic_ring_buf<T> *buf = m_buf.load(relaxed);
-
-  if (buf->capacity() < (bottom - top) + 1) {
-    // Deque is full, build a new one.
-    impl::atomic_ring_buf<T> *bigger = buf->resize(bottom, top);
-
-    [&]() noexcept {
-      // This should never throw as we reserve 64 slots.
-      m_garbage.emplace_back(std::exchange(buf, bigger));
-    }();
-    m_buf.store(buf, relaxed);
-  }
-
-  // Construct new object, this does not have to be atomic as no one can steal this item until
-  // after we store the new value of bottom, ordering is maintained by surrounding atomics.
-  buf->store(bottom, val);
-
-  std::atomic_thread_fence(release);
-  m_bottom.store(bottom + 1, relaxed);
-
-  if (m_splitreq.load(relaxed)) {
-    grow_shared(bottom + 1);
-  }
-}
-
-template <dequeable T>
-template <std::invocable F>
-  requires std::convertible_to<T, std::invoke_result_t<F>>
-constexpr auto
-deque<T>::pop(F &&when_empty) noexcept(std::is_nothrow_invocable_v<F>) -> std::invoke_result_t<F> {
-
-  std::ptrdiff_t const bottom = m_bottom.load(relaxed) - 1;
-  impl::atomic_ring_buf<T> *buf = m_buf.load(relaxed);
-  m_bottom.store(bottom, relaxed);
-
-  // std::ptrdiff_t split = m_split.load(relaxed);
-
-  if (bottom >= m_osplit) {
-    if (m_splitreq.load(relaxed)) {
-      grow_shared(bottom);
-    }
-
-    return buf->load(bottom);
-  }
-
-  shrink_shared();
-
-  if (bottom >= m_osplit) {
-    return buf->load(bottom);
-  }
-
-  m_bottom.store(bottom + 1, relaxed);
-  return std::invoke(std::forward<F>(when_empty));
-}
-
-template <dequeable T>
-constexpr auto deque<T>::steal() noexcept -> steal_t<T> {
-  std::ptrdiff_t top = m_top.load(acquire);
-  // impl::thread_fence_seq_cst();
-  std::ptrdiff_t const split = m_split.load(acquire);
-
-  if (top < split) {
-    // Must load *before* acquiring the slot as slot may be overwritten immediately after
-    // acquiring. This load is NOT required to be atomic even-though it may race with an overwrite
-    // as we only return the value if we win the race below guaranteeing we had no race during our
-    // read. If we loose the race then 'x' could be corrupt due to read-during-write race but as T
-    // is trivially destructible this does not matter.
-    T tmp = m_buf.load(consume)->load(top);
-
-    static_assert(std::is_trivially_destructible_v<T>, "concept 'atomicable' should guarantee this already");
-
-    if (!m_top.compare_exchange_strong(top, top + 1, seq_cst, relaxed)) {
-      return {.code = err::lost, .val = {}};
-    }
-    return {.code = err::none, .val = tmp};
-  }
-  bool expected = false;
-  if (!m_splitreq.load(relaxed)) {
-    (void)m_splitreq.compare_exchange_strong(expected, true, release, relaxed);
-  }
-  return {.code = err::empty, .val = {}}; //TODO: check what this should return, empty or lost. Maybe that's why it gets stuck?
-}
-
-template <dequeable T>
-constexpr deque<T>::~deque() noexcept {
-  delete m_buf.load(); // NOLINT
-}
 
 } // namespace ext
 
