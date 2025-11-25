@@ -335,11 +335,8 @@ class deque : impl::immovable<deque<T>> {
  private:
   alignas(impl::k_cache_line) std::atomic<std::ptrdiff_t> m_top;
   alignas(impl::k_cache_line) std::atomic<std::ptrdiff_t> m_bottom;
-  alignas(impl::k_cache_line) std::atomic<std::ptrdiff_t> m_split;
   alignas(impl::k_cache_line) std::atomic<impl::atomic_ring_buf<T> *> m_buf;
   std::vector<std::unique_ptr<impl::atomic_ring_buf<T>>> m_garbage;
-  alignas(impl::k_cache_line) std::atomic<bool> m_splitreq;
-  std::ptrdiff_t m_osplit;                              // owner-local copy of split
 
   // Convenience aliases.
   static constexpr std::memory_order relaxed = std::memory_order_relaxed;
@@ -347,42 +344,13 @@ class deque : impl::immovable<deque<T>> {
   static constexpr std::memory_order acquire = std::memory_order_acquire;
   static constexpr std::memory_order release = std::memory_order_release;
   static constexpr std::memory_order seq_cst = std::memory_order_seq_cst;
-
-  /**
-   * @brief Grow the shared portion of the deque.
-   *
-   * Moves the split index towards the bottom/head index to expose more of the
-   * owner’s private tasks to thieves. This is typically called by the owning
-   * thread when there is a pending request to share more work (e.g. after
-   * other workers failed to steal and set a flag).
-   *
-   * If there are not enough private tasks to share, this function is a no-op.
-   * Must only be called by the owner thread of the deque.
-   */
-  constexpr auto grow_shared(std::ptrdiff_t bottom) noexcept -> void;
-  /**
-   * @brief Shrink the shared portion of the deque.
-   *
-   * Moves the split index towards the top/tail index to reduce the size of the
-   * shared region and keep more tasks private to the owner. This is used when
-   * the shared region has grown large compared to the amount of work, and
-   * includes the necessary synchronization to avoid races with concurrent
-   * steal operations.
-   *
-   * If the shared region is not large enough to shrink safely, this function
-   * is a no-op. Must only be called by the owner thread of the deque.
-   */
-  constexpr auto shrink_shared() noexcept -> void;
 };
 
 template <dequeable T>
 constexpr deque<T>::deque(std::ptrdiff_t cap)
     : m_top(0),
       m_bottom(0),
-      m_split(0),
-      m_buf(new impl::atomic_ring_buf<T>{cap}),
-      m_splitreq(false),
-      m_osplit(0) {
+      m_buf(new impl::atomic_ring_buf<T>{cap}) {
   m_garbage.reserve(k_garbage_reserve);
 }
 
@@ -411,37 +379,6 @@ constexpr auto deque<T>::empty() const noexcept -> bool {
 }
 
 template <dequeable T>
-constexpr auto deque<T>::grow_shared(std::ptrdiff_t bottom) noexcept -> void {
-  // std::ptrdiff_t const bottom = m_bottom.load(relaxed);
-
-  std::ptrdiff_t const new_s = (m_osplit + bottom) / 2;   // old
-  // std::ptrdiff_t const new_s = bottom;
-
-  m_split.store(new_s, release);
-  m_osplit = new_s;
-  m_splitreq.store(false, relaxed);
-}
-
-template <dequeable T>
-constexpr auto deque<T>::shrink_shared() noexcept -> void {
-  impl::thread_fence_seq_cst();
-
-  const ptrdiff_t top = m_top.load(acquire);
-
-  m_split.store(top, relaxed);
-  m_osplit = top;
-
-  impl::thread_fence_seq_cst();
-
-  std::ptrdiff_t real_top = m_top.load(acquire);
-
-  if (real_top > top) {
-    m_split.store(real_top, relaxed);
-    m_osplit = real_top;
-  }
-}
-
-template <dequeable T>
 constexpr auto deque<T>::push(T const &val) -> void {
   std::ptrdiff_t const bottom = m_bottom.load(relaxed);
   std::ptrdiff_t const top = m_top.load(acquire);
@@ -464,10 +401,6 @@ constexpr auto deque<T>::push(T const &val) -> void {
 
   std::atomic_thread_fence(release);
   m_bottom.store(bottom + 1, relaxed);
-
-  if (m_splitreq.load(relaxed)) {
-    grow_shared(bottom + 1);
-  }
 }
 
 template <dequeable T>
@@ -476,26 +409,29 @@ template <std::invocable F>
 constexpr auto
 deque<T>::pop(F &&when_empty) noexcept(std::is_nothrow_invocable_v<F>) -> std::invoke_result_t<F> {
 
-  std::ptrdiff_t const bottom = m_bottom.load(relaxed) - 1;
-  impl::atomic_ring_buf<T> *buf = m_buf.load(relaxed);
-  m_bottom.store(bottom, relaxed);
+  std::ptrdiff_t const bottom = m_bottom.load(relaxed) - 1; //
+  impl::atomic_ring_buf<T> *buf = m_buf.load(relaxed);      //
+  m_bottom.store(bottom, relaxed);                          // Stealers can no longer steal.
 
-  std::ptrdiff_t split = m_split.load(relaxed);
+  impl::thread_fence_seq_cst();
 
-  if (bottom >= m_osplit) {
-    if (m_splitreq.load(relaxed)) {
-      grow_shared(bottom);
+  std::ptrdiff_t top = m_top.load(relaxed);
+
+  if (top <= bottom) {
+    // Non-empty deque
+    if (top == bottom) {
+      // The last item could get stolen, by a stealer that loaded bottom before our write above.
+      if (!m_top.compare_exchange_strong(top, top + 1, seq_cst, relaxed)) {
+        // Failed race, thief got the last item.
+        m_bottom.store(bottom + 1, relaxed);
+        return std::invoke(std::forward<F>(when_empty));
+      }
+      m_bottom.store(bottom + 1, relaxed);
     }
-
+    // Can delay load until after acquiring slot as only this thread can push(),
+    // This load is not required to be atomic as we are the exclusive writer.
     return buf->load(bottom);
   }
-
-  shrink_shared();
-
-  if (bottom >= m_osplit) {
-    return buf->load(bottom);
-  }
-
   m_bottom.store(bottom + 1, relaxed);
   return std::invoke(std::forward<F>(when_empty));
 }
@@ -504,9 +440,9 @@ template <dequeable T>
 constexpr auto deque<T>::steal() noexcept -> steal_t<T> {
   std::ptrdiff_t top = m_top.load(acquire);
   impl::thread_fence_seq_cst();
-  std::ptrdiff_t const split = m_split.load(acquire);
+  std::ptrdiff_t const bottom = m_bottom.load(acquire);
 
-  if (top < split) {
+  if (top < bottom) {
     // Must load *before* acquiring the slot as slot may be overwritten immediately after
     // acquiring. This load is NOT required to be atomic even-though it may race with an overwrite
     // as we only return the value if we win the race below guaranteeing we had no race during our
@@ -521,8 +457,6 @@ constexpr auto deque<T>::steal() noexcept -> steal_t<T> {
     }
     return {.code = err::none, .val = tmp};
   }
-  bool expected = false;
-  (void)m_splitreq.compare_exchange_strong(expected, true, release, relaxed);
   return {.code = err::empty, .val = {}};
 }
 
