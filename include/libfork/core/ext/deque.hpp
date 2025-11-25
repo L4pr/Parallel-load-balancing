@@ -523,7 +523,7 @@ constexpr auto deque<T>::steal() noexcept -> steal_t<T> {
   }
   bool expected = false;
   (void)m_splitreq.compare_exchange_strong(expected, true, release, relaxed);
-  return {.code = err::lost, .val = {}}; //TODO: check what this should return, empty or lost. Maybe that's why it gets stuck?
+  return {.code = err::empty, .val = {}}; //TODO: check what this should return, empty or lost. Maybe that's why it gets stuck?
 }
 
 template <dequeable T>
