@@ -372,7 +372,7 @@ class deque : impl::immovable<deque<T>> {
    * If the shared region is not large enough to shrink safely, this function
    * is a no-op. Must only be called by the owner thread of the deque.
    */
-  constexpr auto shrink_shared() noexcept -> void;
+  [[nodiscard]] constexpr auto shrink_shared(std::ptrdiff_t bottom) noexcept -> bool;
 };
 
 template <dequeable T>
@@ -423,22 +423,31 @@ constexpr auto deque<T>::grow_shared(std::ptrdiff_t bottom) noexcept -> void {
 }
 
 template <dequeable T>
-constexpr auto deque<T>::shrink_shared() noexcept -> void {
-  impl::thread_fence_seq_cst();
+constexpr auto deque<T>::shrink_shared(std::ptrdiff_t bottom) noexcept -> bool {
+  // impl::thread_fence_seq_cst();
 
   const ptrdiff_t top = m_top.load(acquire);
 
-  m_split.store(top, relaxed);
-  m_osplit = top;
+  if (top >= m_osplit) {
+    return true;
+  }
+
+  std::ptrdiff_t new_split = (m_osplit + top) / 2;
+
+  m_split.store(new_split, relaxed);
+  m_osplit = new_split;
 
   impl::thread_fence_seq_cst();
 
   std::ptrdiff_t real_top = m_top.load(acquire);
 
-  if (real_top > top) {
-    m_split.store(real_top, relaxed);
-    m_osplit = real_top;
+  if (real_top > new_split) {
+    new_split = (real_top + m_osplit) / 2;
+    m_split.store(new_split, relaxed);
+    m_osplit = new_split;
   }
+
+  return bottom <= m_osplit;
 }
 
 template <dequeable T>
@@ -476,34 +485,29 @@ template <std::invocable F>
 constexpr auto
 deque<T>::pop(F &&when_empty) noexcept(std::is_nothrow_invocable_v<F>) -> std::invoke_result_t<F> {
 
-  std::ptrdiff_t const bottom = m_bottom.load(relaxed) - 1;
+  std::ptrdiff_t bottom = m_bottom.load(relaxed);
   impl::atomic_ring_buf<T> *buf = m_buf.load(relaxed);
+
+  if (m_osplit == bottom) {
+    if (shrink_shared(bottom)) {
+      return std::invoke(std::forward<F>(when_empty));
+    }
+  }
+
+  bottom = bottom - 1;
   m_bottom.store(bottom, relaxed);
 
-  // std::ptrdiff_t split = m_split.load(relaxed);
-
-  if (bottom >= m_osplit) {
-    if (m_splitreq.load(relaxed)) {
-      grow_shared(bottom);
-    }
-
-    return buf->load(bottom);
+  if (m_splitreq.load(relaxed)) {
+    grow_shared(bottom);
   }
 
-  shrink_shared();
-
-  if (bottom >= m_osplit) {
-    return buf->load(bottom);
-  }
-
-  m_bottom.store(bottom + 1, relaxed);
-  return std::invoke(std::forward<F>(when_empty));
+  return buf->load(bottom);
 }
 
 template <dequeable T>
 constexpr auto deque<T>::steal() noexcept -> steal_t<T> {
   std::ptrdiff_t top = m_top.load(acquire);
-  // impl::thread_fence_seq_cst();
+  impl::thread_fence_seq_cst();
   std::ptrdiff_t const split = m_split.load(acquire);
 
   if (top < split) {
@@ -512,7 +516,7 @@ constexpr auto deque<T>::steal() noexcept -> steal_t<T> {
     // as we only return the value if we win the race below guaranteeing we had no race during our
     // read. If we loose the race then 'x' could be corrupt due to read-during-write race but as T
     // is trivially destructible this does not matter.
-    T tmp = m_buf.load(consume)->load(top);
+    T tmp = m_buf.load(acquire)->load(top);
 
     static_assert(std::is_trivially_destructible_v<T>, "concept 'atomicable' should guarantee this already");
 
@@ -521,11 +525,11 @@ constexpr auto deque<T>::steal() noexcept -> steal_t<T> {
     }
     return {.code = err::none, .val = tmp};
   }
-  bool expected = false;
   if (!m_splitreq.load(relaxed)) {
+    bool expected = false;
     (void)m_splitreq.compare_exchange_strong(expected, true, release, relaxed);
   }
-  return {.code = err::empty, .val = {}}; //TODO: check what this should return, empty or lost. Maybe that's why it gets stuck?
+  return {.code = err::empty, .val = {}};
 }
 
 template <dequeable T>
