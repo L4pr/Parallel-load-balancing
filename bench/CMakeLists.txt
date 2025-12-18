@@ -20,13 +20,16 @@ file(GLOB_RECURSE BENCH_SERIAL CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/so
 file(GLOB_RECURSE BENCH_LIBFORK CONFIGURE_DEPENDS
      "${CMAKE_CURRENT_SOURCE_DIR}/source/**/libfork.cpp"
 )
+file(GLOB_RECURSE BENCH_LACE CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/source/**/lace*.cpp")
+
 
 add_executable(
-  benchmark ${BENCH_C_SOURCES} ${BENCH_SERIAL} ${BENCH_LIBFORK}
+  benchmark ${BENCH_C_SOURCES} ${BENCH_SERIAL} ${BENCH_LIBFORK} ${BENCH_LACE}
             ${CMAKE_CURRENT_SOURCE_DIR}/source/calibrate.cpp
 )
 
 target_link_libraries(benchmark PRIVATE libfork::libfork benchmark::benchmark_main)
+target_link_libraries(benchmark PRIVATE lace)
 
 option(LF_NO_CHECK "Disable benchmark verifications to speed up the benchmarks " OFF)
 
@@ -35,6 +38,20 @@ if(LF_NO_CHECK)
 endif()
 
 # --- Optional dependencies ---
+
+include(FetchContent)
+
+FetchContent_Declare(
+        lace
+        GIT_REPOSITORY https://github.com/trolando/lace.git
+        GIT_TAG        v2.0.3
+)
+
+# Configuration: Disable Lace's own tests/benchmarks
+#set(LACE_BUILD_TESTS OFF CACHE INTERNAL "")
+#set(LACE_BUILD_BENCHMARKS OFF CACHE INTERNAL "")
+
+FetchContent_MakeAvailable(lace)
 
 find_package(TBB QUIET)
 

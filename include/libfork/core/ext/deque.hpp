@@ -22,10 +22,6 @@
 #include <vector>      // for vector
 #include <version>     // for ptrdiff_t
 
-#if defined(__x86_64__) || defined(_M_X64)
-    #include <immintrin.h>
-#endif
-
 #include "libfork/core/impl/atomics.hpp" // for thread_fence_seq_cst
 #include "libfork/core/impl/utility.hpp" // for k_cache_line, immovable
 #include "libfork/core/macro.hpp"        // for LF_ASSERT, LF_STATIC_CALL, LF_STATIC_CONST
@@ -33,7 +29,7 @@
 /**
  * @file deque.hpp
  *
- * @brief An implementation of the "Blocking Work-Stealing Queue using CAS"
+ * @brief A production-quality implementation of the Chase-Lev lock-free SPMC deque.
  */
 
 namespace lf {
@@ -337,50 +333,8 @@ class deque : impl::immovable<deque<T>> {
   constexpr ~deque() noexcept;
 
  private:
-  // --- Private Helpers for CAS Lock ---
-
-  // Blocking spinlock acquire (used by Owner)
-  void lock() noexcept {
-    int expected = 0;
-    if (m_flag.compare_exchange_strong(expected, 1, acquire)) return;
-
-    while (true) {
-      expected = 0;
-      if (m_flag.load(relaxed) == 0) {
-        if (m_flag.compare_exchange_weak(expected, 1, acquire)) return;
-      }
-
-      #if defined(__x86_64__) || defined(_M_X64)
-      _mm_pause();
-      #else
-      std::this_thread::yield();
-      #endif
-    }
-  }
-
-  // Non-blocking try-lock (used by Thief)
-  bool try_lock() noexcept {
-    int expected = 0;
-    return m_flag.compare_exchange_strong(expected, 1, acquire);
-  }
-
-  // Release lock
-  void unlock() noexcept {
-    m_flag.store(0, release);
-  }
-
-  // Internal helper to check empty without strict memory ordering
-  // Useful for the "optimization" checks mentioned in the paper
-  bool empty_relaxed() const noexcept {
-    return m_top.load(relaxed) >= m_bottom.load(relaxed);
-  }
-
-  // CAS Lock Flag: 0 = Free, 1 = Locked
-  alignas(impl::k_cache_line) std::atomic<int> m_flag{0};
-
   alignas(impl::k_cache_line) std::atomic<std::ptrdiff_t> m_top;
   alignas(impl::k_cache_line) std::atomic<std::ptrdiff_t> m_bottom;
-
   alignas(impl::k_cache_line) std::atomic<impl::atomic_ring_buf<T> *> m_buf;
   std::vector<std::unique_ptr<impl::atomic_ring_buf<T>>> m_garbage;
 
@@ -426,26 +380,27 @@ constexpr auto deque<T>::empty() const noexcept -> bool {
 
 template <dequeable T>
 constexpr auto deque<T>::push(T const &val) -> void {
-
-  lock(); // Acquire lock for push operation
-
   std::ptrdiff_t const bottom = m_bottom.load(relaxed);
-  std::ptrdiff_t const top = m_top.load(relaxed);
+  std::ptrdiff_t const top = m_top.load(acquire);
   impl::atomic_ring_buf<T> *buf = m_buf.load(relaxed);
 
   if (buf->capacity() < (bottom - top) + 1) {
+    // Deque is full, build a new one.
     impl::atomic_ring_buf<T> *bigger = buf->resize(bottom, top);
 
-    m_garbage.emplace_back(buf);
-    buf = bigger;
-
+    [&]() noexcept {
+      // This should never throw as we reserve 64 slots.
+      m_garbage.emplace_back(std::exchange(buf, bigger));
+    }();
     m_buf.store(buf, relaxed);
   }
 
+  // Construct new object, this does not have to be atomic as no one can steal this item until
+  // after we store the new value of bottom, ordering is maintained by surrounding atomics.
   buf->store(bottom, val);
-  m_bottom.store(bottom + 1, relaxed);
 
-  unlock(); // Release lock after push operation
+  std::atomic_thread_fence(release);
+  m_bottom.store(bottom + 1, relaxed);
 }
 
 template <dequeable T>
@@ -454,53 +409,55 @@ template <std::invocable F>
 constexpr auto
 deque<T>::pop(F &&when_empty) noexcept(std::is_nothrow_invocable_v<F>) -> std::invoke_result_t<F> {
 
-  if (empty_relaxed()) {
-    return std::invoke(std::forward<F>(when_empty));
-  }
+  std::ptrdiff_t const bottom = m_bottom.load(relaxed) - 1; //
+  impl::atomic_ring_buf<T> *buf = m_buf.load(relaxed);      //
+  m_bottom.store(bottom, relaxed);                          // Stealers can no longer steal.
 
-  lock();
+  impl::thread_fence_seq_cst();
 
-  std::ptrdiff_t const bottom = m_bottom.load(relaxed) - 1;
-  std::ptrdiff_t const top = m_top.load(relaxed);
-  impl::atomic_ring_buf<T> *buf = m_buf.load(relaxed);
+  std::ptrdiff_t top = m_top.load(relaxed);
 
   if (top <= bottom) {
-    m_bottom.store(bottom, relaxed);
-    auto val = buf->load(bottom);
-
-    unlock(); // release lock after pop
-    return val;
+    // Non-empty deque
+    if (top == bottom) {
+      // The last item could get stolen, by a stealer that loaded bottom before our write above.
+      if (!m_top.compare_exchange_strong(top, top + 1, seq_cst, relaxed)) {
+        // Failed race, thief got the last item.
+        m_bottom.store(bottom + 1, relaxed);
+        return std::invoke(std::forward<F>(when_empty));
+      }
+      m_bottom.store(bottom + 1, relaxed);
+    }
+    // Can delay load until after acquiring slot as only this thread can push(),
+    // This load is not required to be atomic as we are the exclusive writer.
+    return buf->load(bottom);
   }
-
-  unlock(); // Release lock
+  m_bottom.store(bottom + 1, relaxed);
   return std::invoke(std::forward<F>(when_empty));
 }
 
 template <dequeable T>
 constexpr auto deque<T>::steal() noexcept -> steal_t<T> {
+  std::ptrdiff_t top = m_top.load(acquire);
+  impl::thread_fence_seq_cst();
+  std::ptrdiff_t const bottom = m_bottom.load(acquire);
 
-  if (empty_relaxed()) {
-    return {.code = err::empty, .val = {}};
-  }
+  if (top < bottom) {
+    // Must load *before* acquiring the slot as slot may be overwritten immediately after
+    // acquiring. This load is NOT required to be atomic even-though it may race with an overwrite
+    // as we only return the value if we win the race below guaranteeing we had no race during our
+    // read. If we loose the race then 'x' could be corrupt due to read-during-write race but as T
+    // is trivially destructible this does not matter.
+    T tmp = m_buf.load(consume)->load(top);
 
-  if (try_lock()) {
-    // Lock acquired.
-    std::ptrdiff_t const top = m_top.load(relaxed);
-    std::ptrdiff_t const bottom = m_bottom.load(relaxed);
-    impl::atomic_ring_buf<T> *buf = m_buf.load(relaxed);
+    static_assert(std::is_trivially_destructible_v<T>, "concept 'atomicable' should guarantee this already");
 
-    if (top < bottom) {
-      T val = buf->load(top);
-      m_top.store(top + 1, relaxed);
-
-      unlock(); // Release lock
-      return {.code = err::none, .val = val};
+    if (!m_top.compare_exchange_strong(top, top + 1, seq_cst, relaxed)) {
+      return {.code = err::lost, .val = {}};
     }
-    unlock();
-    return {.code = err::empty, .val = {}};
+    return {.code = err::none, .val = tmp};
   }
-
-  return {.code = err::lost, .val = {}};
+  return {.code = err::empty, .val = {}};
 }
 
 template <dequeable T>
