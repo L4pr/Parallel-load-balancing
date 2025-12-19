@@ -1,6 +1,6 @@
 ``cd ../../mnt/c/Users/renzo/Desktop/Universiteit/Research_skills/``
 
-``./build/bench/bench/benchmark   --benchmark_time_unit=ms   --benchmark_filter="fib"   --benchmark_out_format=json --benchmark_out=data/pc/fib.json   --benchmark_repetitions=3``
+``./build/bench/bench/bench_blocking   --benchmark_time_unit=ms   --benchmark_filter="fib"   --benchmark_out_format=json --benchmark_out=data/pc/fib.json   --benchmark_repetitions=3``
 
 ``cmake --build --preset=benchmark-nix``
 
