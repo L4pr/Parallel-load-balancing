@@ -1,5 +1,5 @@
-#ifndef C9703881_3D9C_41A5_A7A2_44615C4CFA6A
-#define C9703881_3D9C_41A5_A7A2_44615C4CFA6A
+#ifndef LIBFORK_CORE_EXT_DEQUE_LACE_HPP
+#define LIBFORK_CORE_EXT_DEQUE_LACE_HPP
 
 // Copyright © Conor Williams <conorwilliams@outlook.com>
 
@@ -10,11 +10,8 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 #include <atomic>
-#include <concepts>
 #include <cstddef>
 #include <memory>
-#include <optional>
-#include <type_traits>
 #include <utility>
 #include <new>
 #include <limits>
@@ -24,6 +21,9 @@
 #include "libfork/core/impl/atomics.hpp" // for thread_fence_seq_cst
 #include "libfork/core/impl/utility.hpp" // for k_cache_line, immovable
 #include "libfork/core/macro.hpp"        // for LF_ASSERT, etc
+
+// --- NEW INCLUDE ---
+#include "libfork/core/ext/deque_common.hpp" // For dequeable, steal_t, err, return_nullopt
 
 // Platform headers for mmap/VirtualAlloc
 #if defined(_WIN32) || defined(_WIN64)
@@ -58,95 +58,6 @@ namespace impl {
 
 inline namespace ext {
 
-template <typename T>
-concept atomicable = std::is_trivially_copyable_v<T> &&
-                     std::is_copy_constructible_v<T> &&
-                     std::is_move_constructible_v<T> &&
-                     std::is_copy_assignable_v<T> &&
-                     std::is_move_assignable_v<T>;
-
-template <typename T>
-concept lock_free = atomicable<T> && std::atomic<T>::is_always_lock_free;
-
-template <typename T>
-concept dequeable = lock_free<T> && std::default_initializable<T>;
-
-enum class err : int {
-  none = 0,
-  lost,
-  empty,
-};
-
-/**
- * @brief The return type of `lf::deque` `steal()` operation.
- *
- * This type is suitable for structured bindings. We return a custom type instead of a
- * `std::optional` to allow for more information to be returned as to why a steal may fail.
- */
-template <typename T>
-struct steal_t {
-    /**
-     * @brief Check if the operation succeeded.
-     */
-    [[nodiscard]] constexpr explicit operator bool() const noexcept { return code == err::none; }
-    /**
-     * @brief Get the value like ``std::optional``.
-     *
-     * Requires ``code == err::none`` .
-     */
-    [[nodiscard]] constexpr auto operator*() noexcept -> T & {
-        LF_ASSERT(code == err::none);
-        return val;
-    }
-    /**
-     * @brief Get the value like ``std::optional``.
-     *
-     * Requires ``code == err::none`` .
-     */
-    [[nodiscard]] constexpr auto operator*() const noexcept -> T const & {
-        LF_ASSERT(code == err::none);
-        return val;
-    }
-    /**
-     * @brief Get the value ``like std::optional``.
-     *
-     * Requires ``code == err::none`` .
-     */
-    [[nodiscard]] constexpr auto operator->() noexcept -> T * {
-        LF_ASSERT(code == err::none);
-        return std::addressof(val);
-    }
-    /**
-     * @brief Get the value ``like std::optional``.
-     *
-     * Requires ``code == err::none`` .
-     */
-    [[nodiscard]] constexpr auto operator->() const noexcept -> T const * {
-        LF_ASSERT(code == err::none);
-        return std::addressof(val);
-    }
-
-    /**
-     * @brief The error code of the ``steal()`` operation.
-     */
-    err code;
-    /**
-     * @brief The value stolen from the deque, Only valid if ``code == err::stolen``.
-     */
-    T val;
-};
-
-/**
- * @brief A functor that returns ``std::nullopt``.
- */
-template <typename T>
-struct return_nullopt {
-    /**
-     * @brief Returns ``std::nullopt``.
-     */
-    LF_STATIC_CALL constexpr auto operator()() LF_STATIC_CONST noexcept -> std::optional<T> { return {}; }
-};
-
 struct TopSplit {
     uint32_t top;
     uint32_t split;
@@ -158,16 +69,16 @@ union PackedIndex {
 };
 
 template <dequeable T>
-class deque : impl::immovable<deque<T>> {
+class lace_deque : impl::immovable<lace_deque<T>> {
   static constexpr std::size_t k_cache_line = 128;
   static constexpr std::size_t k_default_cap = 1 << 20;
 
  public:
   using value_type = T;
 
-  constexpr deque() : deque(k_default_cap) {}
+  constexpr lace_deque() : lace_deque(k_default_cap) {}
 
-  explicit deque(const std::size_t cap):
+  explicit lace_deque(const std::size_t cap):
     m_mask(static_cast<std::ptrdiff_t>(cap) - 1),
     m_capacity(static_cast<std::ptrdiff_t>(cap)) {
 
@@ -190,7 +101,7 @@ class deque : impl::immovable<deque<T>> {
       m_osplit = 0;
   }
 
-  ~deque() noexcept {
+  ~lace_deque() noexcept {
       if (m_array) {
           impl::deallocate_virtual(m_array, sizeof(std::atomic<T>) * static_cast<std::size_t>(m_capacity));
       }
@@ -343,4 +254,4 @@ class deque : impl::immovable<deque<T>> {
 
 } // namespace lf
 
-#endif /* C9703881_3D9C_41A5_A7A2_44615C4CFA6A */
+#endif /* LIBFORK_CORE_EXT_DEQUE_LACE_HPP */

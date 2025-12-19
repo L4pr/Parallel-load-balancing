@@ -1,5 +1,5 @@
-#ifndef C9703881_3D9C_41A5_A7A2_44615C4CFA6A
-#define C9703881_3D9C_41A5_A7A2_44615C4CFA6A
+#ifndef LIBFORK_CORE_EXT_DEQUE_CHASE_LEV_HPP
+#define LIBFORK_CORE_EXT_DEQUE_CHASE_LEV_HPP
 
 // Copyright © Conor Williams <conorwilliams@outlook.com>
 
@@ -12,57 +12,24 @@
 #include <algorithm>   // for max
 #include <atomic>      // for atomic, atomic_thread_fence, memory_order, memo...
 #include <bit>         // for has_single_bit
-#include <concepts>    // for convertible_to, invocable, default_initializable
 #include <cstddef>     // for ptrdiff_t, size_t
 #include <functional>  // for invoke
 #include <memory>      // for unique_ptr, make_unique
-#include <optional>    // for optional
-#include <type_traits> // for invoke_result_t
 #include <utility>     // for addressof, forward, exchange
 #include <vector>      // for vector
 #include <version>     // for ptrdiff_t
 
 #include "libfork/core/impl/atomics.hpp" // for thread_fence_seq_cst
 #include "libfork/core/impl/utility.hpp" // for k_cache_line, immovable
-#include "libfork/core/macro.hpp"        // for LF_ASSERT, LF_STATIC_CALL, LF_STATIC_CONST
+#include "libfork/core/macro.hpp"        // for LF_ASSERT
+#include "libfork/core/ext/deque_common.hpp" // For dequeable, steal_t, err, return_nullopt
 
 /**
- * @file deque.hpp
+ * @file deque_chase_lev.hpp
  *
  * @brief A production-quality implementation of the Chase-Lev lock-free SPMC deque.
  */
-
 namespace lf {
-
-inline namespace ext {
-
-/**
- * @brief Verify a type is suitable for use with `std::atomic`
- *
- * This requires a `TriviallyCopyable` type satisfying both `CopyConstructible` and `CopyAssignable`.
- */
-template <typename T>
-concept atomicable = std::is_trivially_copyable_v<T> && //
-                     std::is_copy_constructible_v<T> && //
-                     std::is_move_constructible_v<T> && //
-                     std::is_copy_assignable_v<T> &&    //
-                     std::is_move_assignable_v<T>;      //
-
-/**
- * @brief A concept that verifies a type is lock-free when used with `std::atomic`.
- */
-template <typename T>
-concept lock_free = atomicable<T> && std::atomic<T>::is_always_lock_free;
-
-/**
- * @brief Test is a type is suitable for use with `lf::deque`.
- *
- * This requires it to be `lf::ext::lock_free` and `std::default_initializable`.
- */
-template <typename T>
-concept dequeable = lock_free<T> && std::default_initializable<T>;
-
-} // namespace ext
 
 namespace impl {
 
@@ -148,94 +115,6 @@ struct atomic_ring_buf {
 inline namespace ext {
 
 /**
- * @brief Error codes for ``deque`` 's ``steal()`` operation.
- */
-enum class err : int {
-  /**
-   * @brief The ``steal()`` operation succeeded.
-   */
-  none = 0,
-  /**
-   * @brief  Lost the ``steal()`` race hence, the ``steal()`` operation failed.
-   */
-  lost,
-  /**
-   * @brief The deque is empty and hence, the ``steal()`` operation failed.
-   */
-  empty,
-};
-
-/**
- * @brief The return type of a `lf::deque` `steal()` operation.
- *
- * This type is suitable for structured bindings. We return a custom type instead of a
- * `std::optional` to allow for more information to be returned as to why a steal may fail.
- */
-template <typename T>
-struct steal_t {
-  /**
-   * @brief Check if the operation succeeded.
-   */
-  [[nodiscard]] constexpr explicit operator bool() const noexcept { return code == err::none; }
-  /**
-   * @brief Get the value like ``std::optional``.
-   *
-   * Requires ``code == err::none`` .
-   */
-  [[nodiscard]] constexpr auto operator*() noexcept -> T & {
-    LF_ASSERT(code == err::none);
-    return val;
-  }
-  /**
-   * @brief Get the value like ``std::optional``.
-   *
-   * Requires ``code == err::none`` .
-   */
-  [[nodiscard]] constexpr auto operator*() const noexcept -> T const & {
-    LF_ASSERT(code == err::none);
-    return val;
-  }
-  /**
-   * @brief Get the value ``like std::optional``.
-   *
-   * Requires ``code == err::none`` .
-   */
-  [[nodiscard]] constexpr auto operator->() noexcept -> T * {
-    LF_ASSERT(code == err::none);
-    return std::addressof(val);
-  }
-  /**
-   * @brief Get the value ``like std::optional``.
-   *
-   * Requires ``code == err::none`` .
-   */
-  [[nodiscard]] constexpr auto operator->() const noexcept -> T const * {
-    LF_ASSERT(code == err::none);
-    return std::addressof(val);
-  }
-
-  /**
-   * @brief The error code of the ``steal()`` operation.
-   */
-  err code;
-  /**
-   * @brief The value stolen from the deque, Only valid if ``code == err::stolen``.
-   */
-  T val;
-};
-
-/**
- * @brief A functor that returns ``std::nullopt``.
- */
-template <typename T>
-struct return_nullopt {
-  /**
-   * @brief Returns ``std::nullopt``.
-   */
-  LF_STATIC_CALL constexpr auto operator()() LF_STATIC_CONST noexcept -> std::optional<T> { return {}; }
-};
-
-/**
  * @brief An unbounded lock-free single-producer multiple-consumer work-stealing deque.
  *
  * \rst
@@ -252,16 +131,16 @@ struct return_nullopt {
  * Example:
  *
  * .. include:: ../../../test/source/core/deque.cpp
- *    :code:
- *    :start-after: // !BEGIN-EXAMPLE
- *    :end-before: // !END-EXAMPLE
+ * :code:
+ * :start-after: // !BEGIN-EXAMPLE
+ * :end-before: // !END-EXAMPLE
  *
  * \endrst
  *
  * @tparam T The type of the elements in the deque.
  */
 template <dequeable T>
-class deque : impl::immovable<deque<T>> {
+class chase_lev_deque : impl::immovable<chase_lev_deque<T>> {
 
   static constexpr std::ptrdiff_t k_default_capacity = 1024;
   static constexpr std::size_t k_garbage_reserve = 64;
@@ -274,13 +153,13 @@ class deque : impl::immovable<deque<T>> {
   /**
    * @brief Construct a new empty deque object.
    */
-  constexpr deque() : deque(k_default_capacity) {}
+  constexpr chase_lev_deque() : chase_lev_deque(k_default_capacity) {}
   /**
    * @brief Construct a new empty deque object.
    *
    * @param cap The capacity of the deque (must be a power of 2).
    */
-  constexpr explicit deque(std::ptrdiff_t cap);
+  constexpr explicit chase_lev_deque(std::ptrdiff_t cap);
   /**
    * @brief Get the number of elements in the deque.
    */
@@ -330,7 +209,7 @@ class deque : impl::immovable<deque<T>> {
    *
    * All threads must have finished using the deque before it is destructed.
    */
-  constexpr ~deque() noexcept;
+  constexpr ~chase_lev_deque() noexcept;
 
  private:
   alignas(impl::k_cache_line) std::atomic<std::ptrdiff_t> m_top;
@@ -347,7 +226,7 @@ class deque : impl::immovable<deque<T>> {
 };
 
 template <dequeable T>
-constexpr deque<T>::deque(std::ptrdiff_t cap)
+constexpr chase_lev_deque<T>::chase_lev_deque(std::ptrdiff_t cap)
     : m_top(0),
       m_bottom(0),
       m_buf(new impl::atomic_ring_buf<T>{cap}) {
@@ -355,31 +234,31 @@ constexpr deque<T>::deque(std::ptrdiff_t cap)
 }
 
 template <dequeable T>
-constexpr auto deque<T>::size() const noexcept -> std::size_t {
+constexpr auto chase_lev_deque<T>::size() const noexcept -> std::size_t {
   return static_cast<std::size_t>(ssize());
 }
 
 template <dequeable T>
-constexpr auto deque<T>::ssize() const noexcept -> std::ptrdiff_t {
+constexpr auto chase_lev_deque<T>::ssize() const noexcept -> std::ptrdiff_t {
   ptrdiff_t const bottom = m_bottom.load(relaxed);
   ptrdiff_t const top = m_top.load(relaxed);
   return std::max(bottom - top, ptrdiff_t{0});
 }
 
 template <dequeable T>
-constexpr auto deque<T>::capacity() const noexcept -> ptrdiff_t {
+constexpr auto chase_lev_deque<T>::capacity() const noexcept -> ptrdiff_t {
   return m_buf.load(relaxed)->capacity();
 }
 
 template <dequeable T>
-constexpr auto deque<T>::empty() const noexcept -> bool {
+constexpr auto chase_lev_deque<T>::empty() const noexcept -> bool {
   ptrdiff_t const bottom = m_bottom.load(relaxed);
   ptrdiff_t const top = m_top.load(relaxed);
   return top >= bottom;
 }
 
 template <dequeable T>
-constexpr auto deque<T>::push(T const &val) -> void {
+constexpr auto chase_lev_deque<T>::push(T const &val) -> void {
   std::ptrdiff_t const bottom = m_bottom.load(relaxed);
   std::ptrdiff_t const top = m_top.load(acquire);
   impl::atomic_ring_buf<T> *buf = m_buf.load(relaxed);
@@ -407,7 +286,7 @@ template <dequeable T>
 template <std::invocable F>
   requires std::convertible_to<T, std::invoke_result_t<F>>
 constexpr auto
-deque<T>::pop(F &&when_empty) noexcept(std::is_nothrow_invocable_v<F>) -> std::invoke_result_t<F> {
+chase_lev_deque<T>::pop(F &&when_empty) noexcept(std::is_nothrow_invocable_v<F>) -> std::invoke_result_t<F> {
 
   std::ptrdiff_t const bottom = m_bottom.load(relaxed) - 1; //
   impl::atomic_ring_buf<T> *buf = m_buf.load(relaxed);      //
@@ -437,7 +316,7 @@ deque<T>::pop(F &&when_empty) noexcept(std::is_nothrow_invocable_v<F>) -> std::i
 }
 
 template <dequeable T>
-constexpr auto deque<T>::steal() noexcept -> steal_t<T> {
+constexpr auto chase_lev_deque<T>::steal() noexcept -> steal_t<T> {
   std::ptrdiff_t top = m_top.load(acquire);
   impl::thread_fence_seq_cst();
   std::ptrdiff_t const bottom = m_bottom.load(acquire);
@@ -461,7 +340,7 @@ constexpr auto deque<T>::steal() noexcept -> steal_t<T> {
 }
 
 template <dequeable T>
-constexpr deque<T>::~deque() noexcept {
+constexpr chase_lev_deque<T>::~chase_lev_deque() noexcept {
   delete m_buf.load(); // NOLINT
 }
 
@@ -469,4 +348,4 @@ constexpr deque<T>::~deque() noexcept {
 
 } // namespace lf
 
-#endif /* C9703881_3D9C_41A5_A7A2_44615C4CFA6A */
+#endif /* LIBFORK_CORE_EXT_DEQUE_CHASE_LEV_HPP */
