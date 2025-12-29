@@ -5,6 +5,16 @@
 #include "../util.hpp"
 #include "config.hpp"
 
+#if defined(LF_BENCH_CHASE_LEV)
+#define ALGO_NAME "ChaseLev"
+#elif defined(LF_BENCH_BLOCKING)
+#define ALGO_NAME "Blocking"
+#elif defined(LF_BENCH_LACE)
+#define ALGO_NAME "Lace"
+#else
+#define ALGO_NAME "Unknown"
+#endif
+
 namespace {
 
 using namespace lf;
@@ -16,8 +26,8 @@ using mat = float *;
  *
  * a00 a01            =  a00 * b00 + a01 * b10,   a00 * b01 + a01 * b11
  * a10 a11            =  a10 * b00 + a11 * b10,   a10 * b01 + a11 * b11
- *           b00 b01
- *           b10 b11
+ *         b00 b01
+ *         b10 b11
  */
 inline constexpr auto matmul = [](auto matmul, mat A, mat B, mat R, unsigned n, unsigned s, auto add)
                                    LF_STATIC_CALL -> task<> {
@@ -87,8 +97,8 @@ using namespace lf;
 // BENCHMARK(matmul_libfork<unit_pool, numa_strategy::seq>)->DenseRange(1, 1)->UseRealTime();
 // BENCHMARK(matmul_libfork<debug_pool, numa_strategy::seq>)->DenseRange(1, 1)->UseRealTime();
 
-BENCHMARK(matmul_libfork<lazy_pool, numa_strategy::seq>)->Apply(targs)->UseRealTime();
-BENCHMARK(matmul_libfork<lazy_pool, numa_strategy::fan>)->Apply(targs)->UseRealTime();
+BENCHMARK(matmul_libfork<lazy_pool, numa_strategy::seq>)->Apply(targs)->UseRealTime()->Label(ALGO_NAME);
+BENCHMARK(matmul_libfork<lazy_pool, numa_strategy::fan>)->Apply(targs)->UseRealTime()->Label(ALGO_NAME);
 
-BENCHMARK(matmul_libfork<busy_pool, numa_strategy::seq>)->Apply(targs)->UseRealTime();
-BENCHMARK(matmul_libfork<busy_pool, numa_strategy::fan>)->Apply(targs)->UseRealTime();
+BENCHMARK(matmul_libfork<busy_pool, numa_strategy::seq>)->Apply(targs)->UseRealTime()->Label(ALGO_NAME);
+BENCHMARK(matmul_libfork<busy_pool, numa_strategy::fan>)->Apply(targs)->UseRealTime()->Label(ALGO_NAME);
