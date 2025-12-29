@@ -47,9 +47,8 @@ file(GLOB_RECURSE BENCH_LIBFORK CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/s
 
 # ---- 3. Create Common Library (The Optimization) ----
 
-add_library(bench_common STATIC ${BENCH_COMMON_SOURCES})
+add_library(bench_common OBJECT ${BENCH_COMMON_SOURCES})
 
-# LINK FIX: Added libfork::libfork here
 target_link_libraries(bench_common PUBLIC libfork::libfork benchmark::benchmark_main lace)
 
 target_include_directories(bench_common PUBLIC ${tmc_SOURCE_DIR}/include)
@@ -89,7 +88,7 @@ endif()
 
 function(add_deque_benchmark TARGET_NAME DEQUE_FLAG)
   # Only compile the libfork-specific files here
-  add_executable(${TARGET_NAME} ${BENCH_LIBFORK})
+  add_executable(${TARGET_NAME} ${BENCH_LIBFORK} $<TARGET_OBJECTS:bench_common>)
 
   # Link the pre-compiled common library + libfork
   target_link_libraries(${TARGET_NAME} PRIVATE bench_common libfork::libfork)

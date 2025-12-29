@@ -12,7 +12,7 @@
 #elif defined(LF_BENCH_LACE)
 #define ALGO_NAME "Lace"
 #else
-#define ALGO_NAME "Unknown"
+#define ALGO_NAME "ChaseLev"
 #endif
 
 namespace {
@@ -63,6 +63,7 @@ inline constexpr auto matmul = [](auto matmul, mat A, mat B, mat R, unsigned n, 
 
 template <lf::scheduler Sch, lf::numa_strategy Strategy>
 void matmul_libfork(benchmark::State &state) {
+  state.SetLabel(ALGO_NAME);
 
   state.counters["green_threads"] = state.range(0);
   state.counters["mat NxN"] = matmul_work;
@@ -97,8 +98,8 @@ using namespace lf;
 // BENCHMARK(matmul_libfork<unit_pool, numa_strategy::seq>)->DenseRange(1, 1)->UseRealTime();
 // BENCHMARK(matmul_libfork<debug_pool, numa_strategy::seq>)->DenseRange(1, 1)->UseRealTime();
 
-BENCHMARK(matmul_libfork<lazy_pool, numa_strategy::seq>)->Apply(targs)->UseRealTime()->Label(ALGO_NAME);
-BENCHMARK(matmul_libfork<lazy_pool, numa_strategy::fan>)->Apply(targs)->UseRealTime()->Label(ALGO_NAME);
+BENCHMARK(matmul_libfork<lazy_pool, numa_strategy::seq>)->Apply(targs)->UseRealTime();
+BENCHMARK(matmul_libfork<lazy_pool, numa_strategy::fan>)->Apply(targs)->UseRealTime();
 
-BENCHMARK(matmul_libfork<busy_pool, numa_strategy::seq>)->Apply(targs)->UseRealTime()->Label(ALGO_NAME);
-BENCHMARK(matmul_libfork<busy_pool, numa_strategy::fan>)->Apply(targs)->UseRealTime()->Label(ALGO_NAME);
+BENCHMARK(matmul_libfork<busy_pool, numa_strategy::seq>)->Apply(targs)->UseRealTime();
+BENCHMARK(matmul_libfork<busy_pool, numa_strategy::fan>)->Apply(targs)->UseRealTime();

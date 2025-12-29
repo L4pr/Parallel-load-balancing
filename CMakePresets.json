@@ -198,7 +198,7 @@
         "CMAKE_BUILD_TYPE": "Release",
         "BUILD_TESTING": "OFF",
         "BUILD_BENCHMARKS": "ON",
-        "CMAKE_CXX_FLAGS": "-flto=auto -march=native"
+        "CMAKE_CXX_FLAGS": "-flto=auto -march=native -w"
       }
     },
     {
@@ -214,7 +214,7 @@
         "CMAKE_BUILD_TYPE": "Release",
         "BUILD_TESTING": "ON",
         "BUILD_BENCHMARKS": "OFF",
-        "CMAKE_CXX_FLAGS": "-flto=auto -march=native"
+        "CMAKE_CXX_FLAGS": "-flto=auto -march=native -w"
       }
     }
   ],
