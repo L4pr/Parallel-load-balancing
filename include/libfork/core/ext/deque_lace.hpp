@@ -148,13 +148,22 @@ class lace_deque : impl::immovable<lace_deque<T>> {
   }
 
   constexpr void push(T const &val) noexcept {
-      std::ptrdiff_t const bottom = m_worker.bottom.load(relaxed);
-      (m_array + mask_index(bottom))->store(val, relaxed);
+      // 1. Cache the array pointer in a local variable.
+      // This stops the 35% stall on 'mov (%rdx),%rcx'
+      auto* const arr = m_array;
 
-      m_worker.bottom.store(bottom + 1, release);
+      // 2. Load the current bottom
+      std::ptrdiff_t b = m_worker.bottom.load(relaxed);
 
+      // 3. Store the value. We use the cached 'arr' pointer.
+      (arr + mask_index(b))->store(val, relaxed);
+
+      // 4. Update bottom with RELEASE semantics
+      m_worker.bottom.store(b + 1, release);
+
+      // 5. Keep the cold path out of the way
       if (m_splitreq.load(relaxed)) [[unlikely]] {
-          grow_shared(bottom + 1);
+        this->grow_shared(b + 1);
       }
   }
 
