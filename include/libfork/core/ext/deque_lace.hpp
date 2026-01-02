@@ -63,11 +63,11 @@ struct TopSplit {
 };
 
 inline constexpr TopSplit unpack(uint64_t val) {
-  return { static_cast<uint32_t>(val >> 32), static_cast<uint32_t>(val) };
+  return { static_cast<uint32_t>(val), static_cast<uint32_t>(val >> 32) };
 }
 
 inline constexpr uint64_t pack(uint32_t top, uint32_t split) {
-  return (static_cast<uint64_t>(top) << 32) | static_cast<uint64_t>(split);
+  return (static_cast<uint64_t>(top)) | static_cast<uint64_t>(split) << 32;
 }
 
 template <dequeable T>
@@ -97,9 +97,9 @@ class lace_deque : impl::immovable<lace_deque<T>> {
 
       m_array = static_cast<std::atomic<T>*>(raw);
       // TODO: check if this does shit
-      for (std::size_t i = 0; i < cap; ++i) {
-        new (m_array + i) std::atomic<T>();
-      }
+      // for (std::size_t i = 0; i < cap; ++i) {
+      //   new (m_array + i) std::atomic<T>();
+      // }
 
       m_packed.store(0, relaxed);
       m_bottom.store(0, relaxed);
@@ -219,7 +219,7 @@ class lace_deque : impl::immovable<lace_deque<T>> {
       uint64_t new_p;
       do {
           auto [current_top, current_split] = unpack(old_p);
-          new_p = pack(top, new_split_val);
+          new_p = pack(current_top, new_split_val);
       } while (!m_packed.compare_exchange_weak(old_p, new_p, relaxed, relaxed));
 
       m_osplit = static_cast<std::ptrdiff_t>(new_split_val);
