@@ -63,7 +63,7 @@ struct TopSplit {
 };
 
 static constexpr uint32_t get_top(uint64_t val) noexcept {
-  return static_cast<uint32_t>(val); // Free cast (no shift)
+  return static_cast<uint32_t>(val);
 }
 
 static constexpr uint32_t get_split(uint64_t val) noexcept {
@@ -247,7 +247,7 @@ class lace_deque : impl::immovable<lace_deque<T>> {
   const std::ptrdiff_t m_capacity;
 
   alignas(k_cache_line) std::atomic<uint64_t> m_packed;
-  alignas(k_cache_line) std::atomic<bool> m_splitreq;
+  std::atomic<bool> m_splitreq;
 
   alignas(k_cache_line) std::atomic<std::ptrdiff_t> m_bottom;
   std::ptrdiff_t m_osplit;
