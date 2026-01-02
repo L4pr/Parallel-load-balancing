@@ -62,21 +62,15 @@ struct TopSplit {
     uint32_t split;
 };
 
-#if defined(__GNUC__) || defined(__clang__)
-  #define LF_ALWAYS_INLINE __attribute__((always_inline)) inline
-#else
-  #define LF_ALWAYS_INLINE inline
-#endif
-
-[[nodiscard]] LF_ALWAYS_INLINE static uint32_t get_top(uint64_t val) noexcept {
+[[nodiscard]] LF_FORCEINLINE static uint32_t get_top(uint64_t val) noexcept {
   return static_cast<uint32_t>(val);
 }
 
-[[nodiscard]] LF_ALWAYS_INLINE static uint32_t get_split(uint64_t val) noexcept {
+[[nodiscard]] LF_FORCEINLINE static uint32_t get_split(uint64_t val) noexcept {
   return static_cast<uint32_t>(val >> 32);
 }
 
-[[nodiscard]] LF_ALWAYS_INLINE static uint64_t pack(uint32_t top, uint32_t split) noexcept {
+[[nodiscard]] LF_FORCEINLINE static uint64_t pack(uint32_t top, uint32_t split) noexcept {
   return static_cast<uint64_t>(top) | (static_cast<uint64_t>(split) << 32);
 }
 
@@ -214,6 +208,7 @@ class lace_deque : impl::immovable<lace_deque<T>> {
   }
 
  private:
+  LF_NOINLINE
   constexpr auto grow_shared(const std::ptrdiff_t bottom) noexcept -> void {
       std::ptrdiff_t const new_s = (m_worker.osplit + bottom) >> 1;
 
@@ -228,6 +223,7 @@ class lace_deque : impl::immovable<lace_deque<T>> {
       m_splitreq.store(false, relaxed);
   }
 
+  LF_NOINLINE
   constexpr auto shrink_shared(const std::ptrdiff_t bottom) noexcept -> bool {
       uint64_t old_p = m_packed.load(relaxed);
       uint32_t top = get_top(old_p);
