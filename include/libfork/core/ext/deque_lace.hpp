@@ -142,7 +142,7 @@ class lace_deque : impl::immovable<lace_deque<T>> {
       std::atomic_thread_fence(release);
       m_bottom.store(bottom + 1, relaxed);
 
-      if (m_splitreq.load(relaxed)) [[unlikely]] {
+      if (m_splitreq.load(relaxed)) {
           grow_shared(bottom + 1);
       }
   }
@@ -154,7 +154,7 @@ class lace_deque : impl::immovable<lace_deque<T>> {
       const std::ptrdiff_t bottom = m_bottom.load(relaxed) - 1;
       m_bottom.store(bottom, relaxed);
 
-      if (bottom >= m_osplit ) [[likely]] {
+      if (bottom >= m_osplit ) {
           return (m_array + mask_index(bottom))->load(relaxed);
       }
 
