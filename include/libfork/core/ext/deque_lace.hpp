@@ -143,7 +143,7 @@ class lace_deque : impl::immovable<lace_deque<T>> {
 
   [[nodiscard]] constexpr auto empty() const noexcept -> bool {
       std::ptrdiff_t const bottom = m_bottom.load(relaxed);
-      uint32_t top = get_top(m_packed.load(relaxed));
+      uint32_t const top = static_cast<uint32_t>(m_packed.load(relaxed));
       return static_cast<std::ptrdiff_t>(top) >= bottom;
   }
 

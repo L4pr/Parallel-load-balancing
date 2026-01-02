@@ -214,7 +214,7 @@
         "CMAKE_BUILD_TYPE": "Release",
         "BUILD_TESTING": "ON",
         "BUILD_BENCHMARKS": "OFF",
-        "CMAKE_CXX_FLAGS": "-flto=auto -march=native -w"
+        "CMAKE_CXX_FLAGS": "-flto=auto -march=native -w -g -fcf-protection=none"
       }
     }
   ],
