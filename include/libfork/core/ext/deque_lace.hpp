@@ -199,8 +199,8 @@ class lace_deque : impl::immovable<lace_deque<T>> {
       PackedIndex old_p { .whole = m_packed.load(relaxed) };
       PackedIndex new_p;
       do {
-          new_p = old_p;
-          new_p.parts.split = static_cast<uint32_t>(new_s);
+          auto [top, split] = unpack(old_p);
+          new_p = pack(top, static_cast<uint32_t>(new_s));
       } while (!m_packed.compare_exchange_weak(old_p.whole, new_p.whole, release, relaxed));
 
       m_osplit = new_s;
@@ -208,30 +208,28 @@ class lace_deque : impl::immovable<lace_deque<T>> {
   }
 
   constexpr auto shrink_shared(const std::ptrdiff_t bottom) noexcept -> bool {
-      PackedIndex old_p { .whole = m_packed.load(relaxed) };
-
-      uint32_t top = old_p.parts.top;
-      uint32_t split = old_p.parts.split;
+      uint64_t old_p = m_packed.load(std::memory_order_relaxed);
+      auto [top, split] = unpack(old_p);
 
       if (top == split) return false;
 
       uint32_t new_split_val = (split + top) >> 1;
       if (new_split_val == split) new_split_val = top;
 
-      PackedIndex new_p;
+      uint64_t new_p;
       do {
-          new_p = old_p;
-          new_p.parts.split = new_split_val;
+          new_p = pack(top, new_split_val);
       } while (!m_packed.compare_exchange_weak(old_p.whole, new_p.whole, relaxed, relaxed));
 
-      m_osplit = new_split_val;
+      m_osplit = static_cast<std::ptrdiff_t>(new_split_val);
 
       impl::thread_fence_seq_cst();
 
-      PackedIndex fresh_p { .whole = m_packed.load(relaxed) };
+      uint64_t fresh_p = m_packed.load(std::memory_order_relaxed);
+      auto [fresh_top, fresh_split] = unpack(fresh_p);
 
-      if (fresh_p.parts.top > new_split_val) {
-          m_osplit = fresh_p.parts.top;
+      if (fresh_top > new_split_val) {
+        m_osplit = static_cast<std::ptrdiff_t>(fresh_top);
       }
 
       return bottom >= m_osplit;

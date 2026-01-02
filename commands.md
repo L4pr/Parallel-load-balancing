@@ -1,6 +1,7 @@
 ``cd ../../mnt/c/Users/renzo/Desktop/Universiteit/Research_skills/``
 
 ``./build/bench/bench/bench_lace   --benchmark_time_unit=ms   --benchmark_filter="fib"   --benchmark_out_format=json --benchmark_out=data/pc/fib.json   --benchmark_repetitions=3``
+
 ``./build/bench/bench/bench_lace   --benchmark_time_unit=ms   --benchmark_filter="fib_libfork"   --benchmark_out_format=json --benchmark_out=data/pc/fib.json   --benchmark_repetitions=1 && \
 ./build/bench/bench/bench_lace   --benchmark_time_unit=ms   --benchmark_filter="uts_libfork.*T1L"   --benchmark_out_format=json --benchmark_out=data/pc/fib.json   --benchmark_repetitions=1``
 
@@ -10,6 +11,13 @@
 
 ``cmake --preset=benchmark-nix && \
 cmake --build --preset=benchmark-nix``
+
+
+``git pull && \
+cmake --preset=benchmark-nix && \
+cmake --build --preset=benchmark-nix && \
+./build/bench/bench/bench_lace   --benchmark_time_unit=ms   --benchmark_filter="fib_libfork"   --benchmark_out_format=json --benchmark_out=data/pc/fib.json   --benchmark_repetitions=1 && \
+./build/bench/bench/bench_lace   --benchmark_time_unit=ms   --benchmark_filter="uts_libfork.*T1L"   --benchmark_out_format=json --benchmark_out=data/pc/fib.json   --benchmark_repetitions=1``
 
 ``cmake --build --preset=benchmark-nix``
 
