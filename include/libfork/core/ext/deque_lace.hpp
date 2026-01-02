@@ -182,7 +182,6 @@ class lace_deque : impl::immovable<lace_deque<T>> {
 
   [[nodiscard]] constexpr auto steal() noexcept -> steal_t<T> {
       uint64_t old_p = m_packed.load(acquire);
-      impl::thread_fence_seq_cst();
 
       uint32_t top = get_top(old_p);
       uint32_t split = get_split(old_p);
@@ -198,6 +197,7 @@ class lace_deque : impl::immovable<lace_deque<T>> {
           return {.code = err::none, .val = tmp};
       }
 
+      impl::thread_fence_seq_cst();
       std::ptrdiff_t const bottom = m_worker.bottom.load(acquire);
 
       if (top < bottom && !m_splitreq.load(relaxed)) {
