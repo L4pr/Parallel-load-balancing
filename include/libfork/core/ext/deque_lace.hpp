@@ -200,17 +200,34 @@ class lace_deque : impl::immovable<lace_deque<T>> {
 
  private:
   constexpr auto grow_shared(const std::ptrdiff_t bottom) noexcept -> void {
-      std::ptrdiff_t const new_s = (m_osplit + bottom) >> 1;
+    // 1. Load the current state (we need 'top' for the calculation)
+    uint64_t old_p = m_packed.load(relaxed);
 
-      uint64_t old_p = m_packed.load(relaxed);
-      uint64_t new_p;
-      do {
-          uint32_t top = get_top(old_p);
-          new_p = pack(top, static_cast<uint32_t>(new_s));
-      } while (!m_packed.compare_exchange_weak(old_p, new_p, release, relaxed));
+    // 2. Loop to CAS the new split point
+    // We calculate new_s INSIDE the loop (or based on fresh read) to ensure
+    // we are balancing based on the most recent Thief progress.
+    while (true) {
+      uint32_t top = get_top(old_p);
 
-      m_osplit = new_s;
-      m_splitreq.store(false, relaxed);
+      // --- THE OPTIMIZATION ---
+      // Formula: S_new = T + (H - T) / 2  ==> (Top + Bottom) / 2
+      // This balances the REMAINING work (Bottom - Top) equally between Public and Private.
+      // This allows S to move backwards (reclaiming work) if Thieves are slow!
+      uint32_t new_s_val = (top + static_cast<uint32_t>(bottom)) >> 1;
+
+      // Pack the existing Top with the New Split
+      uint64_t new_p = pack(top, new_s_val);
+
+      // Attempt to update.
+      // Use 'release' to ensure the tasks we just made public are visible.
+      if (m_packed.compare_exchange_weak(old_p, new_p, release, relaxed)) {
+        m_osplit = static_cast<std::ptrdiff_t>(new_s_val);
+        break;
+      }
+      // If CAS fails, 'old_p' is updated automatically, loop and try again.
+    }
+
+    m_splitreq.store(false, relaxed);
   }
 
   constexpr auto shrink_shared(const std::ptrdiff_t bottom) noexcept -> bool {
