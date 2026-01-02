@@ -101,6 +101,7 @@ class lace_deque : impl::immovable<lace_deque<T>> {
 
       m_array = static_cast<std::atomic<T>*>(raw);
 
+      // ''Touch'' each page to ensure it is committed
       volatile char* touch_ptr = static_cast<char*>(raw);
       for (std::size_t i = 0; i < bytes; i += 4096) {
         touch_ptr[i] = 0;
@@ -182,7 +183,7 @@ class lace_deque : impl::immovable<lace_deque<T>> {
 
           uint64_t new_p = pack(top + 1, split);
 
-          if (!m_packed.compare_exchange_strong(old_p, new_p, seq_cst, relaxed)) {
+          if (!m_packed.compare_exchange_strong(old_p, new_p, std::memory_order_acq_rel, relaxed)) {
               return {.code = err::lost, .val = {}};
           }
           return {.code = err::none, .val = tmp};
