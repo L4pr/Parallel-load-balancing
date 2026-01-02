@@ -12,6 +12,9 @@
 ``cmake --preset=benchmark-nix && \
 cmake --build --preset=benchmark-nix``
 
+``cmake --preset=benchmark-nix -DCMAKE_CXX_FLAGS="-g $CMAKE_CXX_FLAGS" && \
+cmake --build --preset=benchmark-nix && \
+sudo perf record -F 999 -g ./build/bench/bench/bench_lace   --benchmark_time_unit=ms   --benchmark_filter="fib_libfork"   --benchmark_out_format=json --benchmark_out=data/pc/fib.json   --benchmark_repetitions=1``
 
 ``git pull && \
 cmake --preset=benchmark-nix && \

@@ -62,15 +62,21 @@ struct TopSplit {
     uint32_t split;
 };
 
-static constexpr uint32_t get_top(uint64_t val) noexcept {
+#if defined(__GNUC__) || defined(__clang__)
+  #define LF_ALWAYS_INLINE __attribute__((always_inline)) inline
+#else
+  #define LF_ALWAYS_INLINE inline
+#endif
+
+[[nodiscard]] LF_ALWAYS_INLINE static uint32_t get_top(uint64_t val) noexcept {
   return static_cast<uint32_t>(val);
 }
 
-static constexpr uint32_t get_split(uint64_t val) noexcept {
+[[nodiscard]] LF_ALWAYS_INLINE static uint32_t get_split(uint64_t val) noexcept {
   return static_cast<uint32_t>(val >> 32);
 }
 
-static constexpr uint64_t pack(uint32_t top, uint32_t split) noexcept {
+[[nodiscard]] LF_ALWAYS_INLINE static uint64_t pack(uint32_t top, uint32_t split) noexcept {
   return static_cast<uint64_t>(top) | (static_cast<uint64_t>(split) << 32);
 }
 
@@ -127,7 +133,7 @@ class lace_deque : impl::immovable<lace_deque<T>> {
 
   [[nodiscard]] constexpr auto ssize() const noexcept -> std::ptrdiff_t {
       std::ptrdiff_t const bottom = m_bottom.load(relaxed);
-      uint32_t top = get_top(m_packed.load(relaxed));
+      uint32_t const top = static_cast<uint32_t>(m_packed.load(relaxed));
       return std::max(bottom - static_cast<std::ptrdiff_t>(top), std::ptrdiff_t{0});
   }
 
