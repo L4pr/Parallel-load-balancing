@@ -100,10 +100,6 @@ class lace_deque : impl::immovable<lace_deque<T>> {
       if (!raw) throw std::bad_alloc();
 
       m_array = static_cast<std::atomic<T>*>(raw);
-      // TODO: check if this does shit
-      //for (std::size_t i = 0; i < cap; ++i) {
-      //  new (m_array + i) std::atomic<T>();
-      //}
 
       m_packed.store(0, relaxed);
       m_bottom.store(0, relaxed);
@@ -146,7 +142,7 @@ class lace_deque : impl::immovable<lace_deque<T>> {
       std::atomic_thread_fence(release);
       m_bottom.store(bottom + 1, relaxed);
 
-      if (m_splitreq.load(relaxed)) {
+      if (m_splitreq.load(relaxed)) [[unlikely]] {
           grow_shared(bottom + 1);
       }
   }
@@ -158,7 +154,7 @@ class lace_deque : impl::immovable<lace_deque<T>> {
       const std::ptrdiff_t bottom = m_bottom.load(relaxed) - 1;
       m_bottom.store(bottom, relaxed);
 
-      if (bottom >= m_osplit ) {
+      if (bottom >= m_osplit ) [[likely]] {
           return (m_array + mask_index(bottom))->load(relaxed);
       }
 
