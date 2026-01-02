@@ -144,8 +144,7 @@ class lace_deque : impl::immovable<lace_deque<T>> {
       std::ptrdiff_t const bottom = m_bottom.load(relaxed);
       (m_array + mask_index(bottom))->store(val, relaxed);
 
-      std::atomic_thread_fence(release);
-      m_bottom.store(bottom + 1, relaxed);
+      m_worker.bottom.store(bottom + 1, release);
 
       if (m_splitreq.load(relaxed)) [[unlikely]] {
           grow_shared(bottom + 1);
