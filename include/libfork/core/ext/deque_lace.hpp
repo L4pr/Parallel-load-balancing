@@ -62,12 +62,16 @@ struct TopSplit {
     uint32_t split;
 };
 
-inline constexpr TopSplit unpack(uint64_t val) {
-  return { static_cast<uint32_t>(val), static_cast<uint32_t>(val >> 32) };
+static constexpr uint32_t get_top(uint64_t val) noexcept {
+  return static_cast<uint32_t>(val); // Free cast (no shift)
 }
 
-inline constexpr uint64_t pack(uint32_t top, uint32_t split) {
-  return (static_cast<uint64_t>(top)) | static_cast<uint64_t>(split) << 32;
+static constexpr uint32_t get_split(uint64_t val) noexcept {
+  return static_cast<uint32_t>(val >> 32);
+}
+
+static constexpr uint64_t pack(uint32_t top, uint32_t split) noexcept {
+  return static_cast<uint64_t>(top) | (static_cast<uint64_t>(split) << 32);
 }
 
 template <dequeable T>
@@ -121,7 +125,7 @@ class lace_deque : impl::immovable<lace_deque<T>> {
 
   [[nodiscard]] constexpr auto ssize() const noexcept -> std::ptrdiff_t {
       std::ptrdiff_t const bottom = m_bottom.load(relaxed);
-      auto [top, split] = unpack(m_packed.load(std::memory_order_relaxed));
+      uint32_t top = get_top(m_packed.load(relaxed));
       return std::max(bottom - static_cast<std::ptrdiff_t>(top), std::ptrdiff_t{0});
   }
 
@@ -131,7 +135,7 @@ class lace_deque : impl::immovable<lace_deque<T>> {
 
   [[nodiscard]] constexpr auto empty() const noexcept -> bool {
       std::ptrdiff_t const bottom = m_bottom.load(relaxed);
-      auto [top, split] = unpack(m_packed.load(std::memory_order_relaxed));
+      uint32_t top = get_top(m_packed.load(relaxed));
       return static_cast<std::ptrdiff_t>(top) >= bottom;
   }
 
@@ -142,7 +146,7 @@ class lace_deque : impl::immovable<lace_deque<T>> {
       std::atomic_thread_fence(release);
       m_bottom.store(bottom + 1, relaxed);
 
-      if (m_splitreq.load(relaxed)) {
+      if (m_splitreq.load(relaxed)) [[unlikely]] {
           grow_shared(bottom + 1);
       }
   }
@@ -154,7 +158,7 @@ class lace_deque : impl::immovable<lace_deque<T>> {
       const std::ptrdiff_t bottom = m_bottom.load(relaxed) - 1;
       m_bottom.store(bottom, relaxed);
 
-      if (bottom >= m_osplit ) {
+      if (bottom >= m_osplit ) [[likely]] {
           return (m_array + mask_index(bottom))->load(relaxed);
       }
 
@@ -170,7 +174,8 @@ class lace_deque : impl::immovable<lace_deque<T>> {
       uint64_t old_p = m_packed.load(acquire);
       impl::thread_fence_seq_cst();
 
-      auto [top, split] = unpack(old_p);
+      uint32_t top = get_top(old_p);
+      uint32_t split = get_split(old_p);
 
       if (top < split) {
           T tmp = (m_array + mask_index(top))->load(relaxed);
@@ -199,7 +204,7 @@ class lace_deque : impl::immovable<lace_deque<T>> {
       uint64_t old_p = m_packed.load(relaxed);
       uint64_t new_p;
       do {
-          auto [top, split] = unpack(old_p);
+          uint32_t top = get_top(old_p);
           new_p = pack(top, static_cast<uint32_t>(new_s));
       } while (!m_packed.compare_exchange_weak(old_p, new_p, release, relaxed));
 
@@ -209,7 +214,8 @@ class lace_deque : impl::immovable<lace_deque<T>> {
 
   constexpr auto shrink_shared(const std::ptrdiff_t bottom) noexcept -> bool {
       uint64_t old_p = m_packed.load(relaxed);
-      auto [top, split] = unpack(old_p);
+      uint32_t top = get_top(old_p);
+      uint32_t split = get_split(old_p);
 
       if (top == split) return false;
 
@@ -218,7 +224,7 @@ class lace_deque : impl::immovable<lace_deque<T>> {
 
       uint64_t new_p;
       do {
-          auto [current_top, current_split] = unpack(old_p);
+          uint32_t current_top = get_top(old_p);
           new_p = pack(current_top, new_split_val);
       } while (!m_packed.compare_exchange_weak(old_p, new_p, relaxed, relaxed));
 
@@ -226,8 +232,8 @@ class lace_deque : impl::immovable<lace_deque<T>> {
 
       impl::thread_fence_seq_cst();
 
-      uint64_t fresh_p = m_packed.load(std::memory_order_relaxed);
-      auto [fresh_top, fresh_split] = unpack(fresh_p);
+      uint64_t fresh_p = m_packed.load(relaxed);
+      uint32_t fresh_top = get_top(fresh_p);
 
       if (fresh_top > new_split_val) {
         m_osplit = static_cast<std::ptrdiff_t>(fresh_top);
