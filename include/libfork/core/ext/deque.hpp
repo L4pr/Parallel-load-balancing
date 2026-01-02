@@ -4,14 +4,7 @@
 // Copyright © Conor Williams <conorwilliams@outlook.com>
 // SPDX-License-Identifier: MPL-2.0
 
-// This file acts as a "Selector" to switch implementations at compile-time.
-
-// 1. Include Common Types (Global Scope)
 #include "libfork/core/ext/deque_common.hpp"
-
-// 2. Include Specific Implementations (Global Scope)
-//    We include them HERE, outside of any 'namespace', because these files
-//    already define their own 'namespace lf { namespace ext { ... } }'.
 
 #if defined(LF_BENCH_CHASE_LEV)
     #include "libfork/core/ext/deque_chase_lev.hpp"
@@ -23,13 +16,9 @@
     #include "libfork/core/ext/deque_lace.hpp"
 
 #else
-    // Default Fallback
     #include "libfork/core/ext/deque_chase_lev.hpp"
 #endif
 
-// 3. Define the Alias (Inside Namespace)
-//    Now we open the namespace just to map the generic name 'deque'
-//    to the specific class we just included.
 
 namespace lf::ext {
 
