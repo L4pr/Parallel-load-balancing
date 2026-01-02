@@ -218,6 +218,7 @@ class lace_deque : impl::immovable<lace_deque<T>> {
 
       uint64_t new_p;
       do {
+          auto [current_top, current_split] = unpack(old_p);
           new_p = pack(top, new_split_val);
       } while (!m_packed.compare_exchange_weak(old_p, new_p, relaxed, relaxed));
 
