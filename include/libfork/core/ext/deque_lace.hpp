@@ -101,6 +101,11 @@ class lace_deque : impl::immovable<lace_deque<T>> {
 
       m_array = static_cast<std::atomic<T>*>(raw);
 
+      volatile char* touch_ptr = static_cast<char*>(raw);
+      for (std::size_t i = 0; i < bytes; i += k_page_size) {
+        touch_ptr[i] = 0;
+      }
+
       m_packed.store(0, relaxed);
       m_bottom.store(0, relaxed);
       m_splitreq.store(false, relaxed);
