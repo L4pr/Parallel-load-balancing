@@ -102,7 +102,7 @@ class lace_deque : impl::immovable<lace_deque<T>> {
       m_array = static_cast<std::atomic<T>*>(raw);
 
       volatile char* touch_ptr = static_cast<char*>(raw);
-      for (std::size_t i = 0; i < bytes; i += k_page_size) {
+      for (std::size_t i = 0; i < bytes; i += 4096) {
         touch_ptr[i] = 0;
       }
 
