@@ -114,9 +114,9 @@ class lace_deque : impl::immovable<lace_deque<T>> {
       }
 
       m_packed.store(0, relaxed);
-      m_bottom.store(0, relaxed);
       m_splitreq.store(false, relaxed);
-      m_osplit = 0;
+      m_worker.bottom.store(0, relaxed);
+      m_worker.osplit = 0;
   }
 
   ~lace_deque() noexcept {
@@ -132,7 +132,7 @@ class lace_deque : impl::immovable<lace_deque<T>> {
   }
 
   [[nodiscard]] constexpr auto ssize() const noexcept -> std::ptrdiff_t {
-      std::ptrdiff_t const bottom = m_bottom.load(relaxed);
+      std::ptrdiff_t const bottom = m_worker.bottom.load(relaxed);
       uint32_t const top = static_cast<uint32_t>(m_packed.load(relaxed));
       return std::max(bottom - static_cast<std::ptrdiff_t>(top), std::ptrdiff_t{0});
   }
@@ -142,16 +142,16 @@ class lace_deque : impl::immovable<lace_deque<T>> {
   }
 
   [[nodiscard]] constexpr auto empty() const noexcept -> bool {
-      std::ptrdiff_t const bottom = m_bottom.load(relaxed);
+      std::ptrdiff_t const bottom = m_worker.bottom.load(relaxed);
       uint32_t const top = static_cast<uint32_t>(m_packed.load(relaxed));
       return static_cast<std::ptrdiff_t>(top) >= bottom;
   }
 
   constexpr void push(T const &val) noexcept {
-      std::ptrdiff_t const bottom = m_bottom.load(relaxed);
+      std::ptrdiff_t const bottom = m_worker.bottom.load(relaxed);
       (m_array + mask_index(bottom))->store(val, relaxed);
 
-      m_bottom.store(bottom + 1, release);
+      m_worker.bottom.store(bottom + 1, release);
 
       if (m_splitreq.load(relaxed)) [[unlikely]] {
           grow_shared(bottom + 1);
@@ -162,10 +162,10 @@ class lace_deque : impl::immovable<lace_deque<T>> {
     requires std::convertible_to<T, std::invoke_result_t<F>>
   constexpr auto pop(F &&when_empty = {}) noexcept(std::is_nothrow_invocable_v<F>) -> std::invoke_result_t<F> {
 
-      const std::ptrdiff_t bottom = m_bottom.load(relaxed) - 1;
-      m_bottom.store(bottom, relaxed);
+      const std::ptrdiff_t bottom = m_worker.bottom.load(relaxed) - 1;
+      m_worker.bottom.store(bottom, relaxed);
 
-      if (bottom >= m_osplit ) [[likely]] {
+      if (bottom >= m_worker.osplit ) [[likely]] {
           return (m_array + mask_index(bottom))->load(relaxed);
       }
 
@@ -173,7 +173,7 @@ class lace_deque : impl::immovable<lace_deque<T>> {
           return (m_array + mask_index(bottom))->load(relaxed);
       }
 
-      m_bottom.store(bottom + 1, relaxed);
+      m_worker.bottom.store(bottom + 1, relaxed);
       return std::invoke(std::forward<F>(when_empty));
   }
 
@@ -195,7 +195,7 @@ class lace_deque : impl::immovable<lace_deque<T>> {
           return {.code = err::none, .val = tmp};
       }
 
-      std::ptrdiff_t const bottom = m_bottom.load(acquire);
+      std::ptrdiff_t const bottom = m_worker.bottom.load(acquire);
 
       if (top < bottom && !m_splitreq.load(relaxed)) {
           m_splitreq.store(true, relaxed);
@@ -206,7 +206,7 @@ class lace_deque : impl::immovable<lace_deque<T>> {
 
  private:
   constexpr auto grow_shared(const std::ptrdiff_t bottom) noexcept -> void {
-      std::ptrdiff_t const new_s = (m_osplit + bottom) >> 1;
+      std::ptrdiff_t const new_s = (m_worker.osplit + bottom) >> 1;
 
       uint64_t old_p = m_packed.load(relaxed);
       uint64_t new_p;
@@ -215,7 +215,7 @@ class lace_deque : impl::immovable<lace_deque<T>> {
           new_p = pack(top, static_cast<uint32_t>(new_s));
       } while (!m_packed.compare_exchange_weak(old_p, new_p, release, relaxed));
 
-      m_osplit = new_s;
+      m_worker.osplit = new_s;
       m_splitreq.store(false, relaxed);
   }
 
@@ -235,7 +235,7 @@ class lace_deque : impl::immovable<lace_deque<T>> {
           new_p = pack(current_top, new_split_val);
       } while (!m_packed.compare_exchange_weak(old_p, new_p, relaxed, relaxed));
 
-      m_osplit = static_cast<std::ptrdiff_t>(new_split_val);
+      m_worker.osplit = static_cast<std::ptrdiff_t>(new_split_val);
 
       impl::thread_fence_seq_cst();
 
@@ -243,10 +243,10 @@ class lace_deque : impl::immovable<lace_deque<T>> {
       uint32_t fresh_top = get_top(fresh_p);
 
       if (fresh_top > new_split_val) {
-        m_osplit = static_cast<std::ptrdiff_t>(fresh_top);
+        m_worker.osplit = static_cast<std::ptrdiff_t>(fresh_top);
       }
 
-      return bottom >= m_osplit;
+      return bottom >= m_worker.osplit;
   }
 
   [[nodiscard]] std::size_t mask_index(std::ptrdiff_t idx) const noexcept {
@@ -258,10 +258,13 @@ class lace_deque : impl::immovable<lace_deque<T>> {
   const std::ptrdiff_t m_capacity;
 
   alignas(k_cache_line) std::atomic<uint64_t> m_packed;
-  std::atomic<bool> m_splitreq;
 
-  alignas(k_cache_line) std::atomic<std::ptrdiff_t> m_bottom;
-  std::ptrdiff_t m_osplit;
+  alignas(k_cache_line) std::atomic<bool> m_splitreq;
+
+  struct alignas(k_cache_line) {
+    std::atomic<std::ptrdiff_t> bottom{0};
+    std::ptrdiff_t osplit{0};
+  } m_worker;
 
   // Convenience aliases
   static constexpr std::memory_order relaxed = std::memory_order_relaxed;
