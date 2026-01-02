@@ -252,7 +252,7 @@ class lace_deque : impl::immovable<lace_deque<T>> {
   const std::ptrdiff_t m_capacity;
 
   alignas(k_cache_line) std::atomic<uint64_t> m_packed;
-  alignas(k_cache_line) std::atomic<bool> m_splitreq;
+  std::atomic<bool> m_splitreq;
 
   alignas(k_cache_line) std::atomic<std::ptrdiff_t> m_bottom;
   std::ptrdiff_t m_osplit;
