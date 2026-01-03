@@ -277,9 +277,6 @@ class lace_deque : impl::immovable<lace_deque<T>> {
         }
       }
 
-      m_worker.bottom = 0;
-      m_worker.osplit = 1;
-
       m_thief.allstolen.store(true, release);
       m_worker.o_allstolen = true;
       return true;
