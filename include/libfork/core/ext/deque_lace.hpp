@@ -272,12 +272,18 @@ class lace_deque : impl::immovable<lace_deque<T>> {
           if (fresh_top > (uint32_t)m_worker.osplit) {
             m_worker.osplit = static_cast<std::ptrdiff_t>(fresh_top);
           }
+
+          if (m_worker.osplit >= m_worker.bottom) {
+            goto declare_empty;
+          }
+
           return false;
         }
       }
-
+      declare_empty:
       m_thief.allstolen.store(true, release);
       m_worker.o_allstolen = true;
+      m_worker.bottom = 0;
       return true;
     }
 
