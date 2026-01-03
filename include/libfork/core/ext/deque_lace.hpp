@@ -142,23 +142,20 @@ class lace_deque : impl::immovable<lace_deque<T>> {
   }
 
   constexpr void push(T const &val) noexcept {
-      // 1. Cache the array pointer in a local variable.
-      // This stops the 35% stall on 'mov (%rdx),%rcx'
-      auto* const arr = m_array;
+    // FORCE these into registers locally
+    auto* const arr = this->m_array;
+    auto const mask = this->m_mask;
+    std::ptrdiff_t const b = m_worker.bottom.load(relaxed);
 
-      // 2. Load the current bottom
-      std::ptrdiff_t b = m_worker.bottom.load(relaxed);
+    // This will now likely compile to one LEA + one MOV
+    (arr + (b & mask))->store(val, relaxed);
 
-      // 3. Store the value. We use the cached 'arr' pointer.
-      (arr + mask_index(b))->store(val, relaxed);
+    // Publication store
+    m_worker.bottom.store(b + 1, release);
 
-      // 4. Update bottom with RELEASE semantics
-      m_worker.bottom.store(b + 1, release);
-
-      // 5. Keep the cold path out of the way
-      if (m_splitreq.load(relaxed)) [[unlikely]] {
-        this->grow_shared(b + 1);
-      }
+    if (m_splitreq.load(relaxed)) [[unlikely]] {
+      grow_shared(b + 1);
+    }
   }
 
   template <std::invocable F = return_nullopt<T>>
@@ -197,14 +194,16 @@ class lace_deque : impl::immovable<lace_deque<T>> {
           return {.code = err::none, .val = tmp};
       }
 
-      impl::thread_fence_seq_cst();
-      std::ptrdiff_t const bottom = m_worker.bottom.load(acquire);
+      return this->steal_slow_path(top);
+  }
 
-      if (top < bottom && !m_splitreq.load(relaxed)) {
-          m_splitreq.store(true, relaxed);
-      }
-
-      return {.code = err::empty, .val = {}};
+  LF_NOINLINE auto steal_slow_path(uint32_t top) -> steal_t<T> {
+    std::atomic_thread_fence(std::memory_order_seq_cst);
+    std::ptrdiff_t const bottom = m_worker.bottom.load(acquire); // <--- Now rare
+    if (top < bottom && !m_splitreq.load(relaxed)) {
+      m_splitreq.store(true, relaxed);
+    }
+    return {.code = err::empty};
   }
 
  private:
