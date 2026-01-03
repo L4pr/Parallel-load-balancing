@@ -172,25 +172,22 @@ class lace_deque : impl::immovable<lace_deque<T>> {
   template <std::invocable F = return_nullopt<T>>
     requires std::convertible_to<T, std::invoke_result_t<F>>
   constexpr auto pop(F &&when_empty = {}) noexcept(std::is_nothrow_invocable_v<F>) -> std::invoke_result_t<F> {
-    if (m_worker.bottom > m_worker.osplit) {
+    if (m_worker.bottom > m_worker.osplit) [[likely]] {
       m_worker.bottom--;
       T val = (m_array + mask_index(m_worker.bottom))->load(std::memory_order_relaxed);
 
-      if (m_splitreq.load(std::memory_order_relaxed)) {
+      if (m_splitreq.load(std::memory_order_relaxed)) [[unlikely]] {
         grow_shared();
       }
       return val;
     }
 
-    if (m_worker.bottom <= 0) {
-      if (!m_worker.o_allstolen) {
-        m_thief.allstolen.store(true, std::memory_order_release);
-        m_worker.o_allstolen = true;
-      }
-      return std::invoke(std::forward<F>(when_empty));
-    }
+    return pop_cold_path(std::forward<F>(when_empty));
+  }
 
-    if (m_worker.o_allstolen) {
+  template <typename F>
+  auto pop_cold_path(F &&when_empty) noexcept -> std::invoke_result_t<F> {
+    if (m_worker.o_allstolen || m_worker.bottom <= 0) {
       return pop_stolen(std::forward<F>(when_empty));
     }
 
@@ -199,18 +196,20 @@ class lace_deque : impl::immovable<lace_deque<T>> {
     }
 
     m_worker.bottom--;
-    return (m_array + mask_index(m_worker.bottom))->load(std::memory_order_relaxed);
+    T val = (m_array + mask_index(m_worker.bottom))->load(std::memory_order_relaxed);
+
+    if (m_splitreq.load(std::memory_order_relaxed)) {
+      grow_shared();
+    }
+    return val;
   }
 
   template <typename F>
   constexpr auto pop_stolen(F&& when_empty) -> std::invoke_result_t<F> {
-      m_worker.bottom--;
-
-      if (!m_worker.o_allstolen) {
-        m_thief.allstolen.store(true, relaxed);
-        m_worker.o_allstolen = true;
-      }
-
+      m_worker.bottom = 0;
+      m_worker.osplit = 1;
+      m_thief.allstolen.store(true, std::memory_order_release);
+      m_worker.o_allstolen = true;
       return std::invoke(std::forward<F>(when_empty));
   }
 
