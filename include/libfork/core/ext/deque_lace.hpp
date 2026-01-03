@@ -107,9 +107,9 @@ class lace_deque : impl::immovable<lace_deque<T>> {
         touch_ptr[i] = 0;
       }
 
-      m_packed.store(0, relaxed);
+      m_thief.packed.store(0, relaxed);
       m_splitreq.store(false, relaxed);
-      m_worker.bottom.store(0, relaxed);
+      m_worker.bottom = 0;
       m_worker.osplit = 0;
   }
 
@@ -144,7 +144,7 @@ class lace_deque : impl::immovable<lace_deque<T>> {
   constexpr void push(T const &val) noexcept {
     (m_array + mask_index(m_worker.bottom))->store(val, relaxed);
 
-    m_worker.head++;
+    m_worker.bottom++;
 
     if (m_worker.o_allstolen) [[unlikely]] {
       uint32_t const bot = static_cast<uint32_t>(m_worker.bottom);
@@ -158,7 +158,7 @@ class lace_deque : impl::immovable<lace_deque<T>> {
       m_worker.osplit = m_worker.bottom;
       m_worker.o_allstolen = false;
     } else if (m_splitreq.load(relaxed)) [[unlikely]] {
-      grow_shared(m_worker.head);
+      grow_shared(m_worker.bottom);
     }
   }
 
@@ -189,7 +189,7 @@ class lace_deque : impl::immovable<lace_deque<T>> {
 
   template <typename F>
   constexpr auto pop_stolen(F&& when_empty) -> std::invoke_result_t<F> {
-      m_worker.head--;
+      m_worker.bottom--;
 
       if (!m_worker.o_allstolen) {
         m_thief.allstolen.store(true, relaxed);
@@ -209,7 +209,7 @@ class lace_deque : impl::immovable<lace_deque<T>> {
       if (top < split) {
           T tmp = (m_array + mask_index(top))->load(relaxed);
 
-          if (!m_packed.compare_exchange_strong(old_p, pack(top + 1, split), std::memory_order_acq_rel, relaxed)) {
+          if (!m_thief.packed.compare_exchange_strong(old_p, pack(top + 1, split), std::memory_order_acq_rel, relaxed)) {
               return {.code = err::lost, .val = {}};
           }
           return {.code = err::none, .val = tmp};
@@ -231,7 +231,7 @@ class lace_deque : impl::immovable<lace_deque<T>> {
       do {
           uint32_t top = get_top(old_p);
           new_p = pack(top, static_cast<uint32_t>(new_s));
-      } while (!m_packed.compare_exchange_weak(old_p, new_p, release, relaxed));
+      } while (!m_thief.packed.compare_exchange_weak(old_p, new_p, release, relaxed));
 
       m_worker.osplit = new_s;
       m_splitreq.store(false, relaxed);
@@ -244,6 +244,7 @@ class lace_deque : impl::immovable<lace_deque<T>> {
 
       if (top != split) {
         uint32_t new_split_val = (split + top) >> 1;
+        uint64_t new_p = pack(top, new_split_val);
 
         if (!m_thief.packed.compare_exchange_strong(old_p, new_p, relaxed)) {
           top = get_top(old_p);
@@ -255,11 +256,11 @@ class lace_deque : impl::immovable<lace_deque<T>> {
         impl::thread_fence_seq_cst();
 
         old_p = m_thief.packed.load(relaxed);
-        top = get_top(old_p);
+        uint32_t fresh_top = get_top(old_p);
 
-        if (top != new_split_val) {
-          if t > new_split_val {
-            m_worker.osplit = static_cast<std::ptrdiff_t>(t);
+        if (fresh_top != new_split_val) {
+          if fresh_top > new_split_val {
+            m_worker.osplit = static_cast<std::ptrdiff_t>(fresh_top);
           }
           return false;
         }
@@ -279,8 +280,8 @@ class lace_deque : impl::immovable<lace_deque<T>> {
   const std::ptrdiff_t m_capacity;
 
   struct alignas(k_cache_line) {
-    std::atomic<uint64_t> m_packed;
-    std::atomic<bool> allstolen{false}
+    std::atomic<uint64_t> packed;
+    std::atomic<bool> allstolen{false};
   } m_thief;
 
   alignas(k_cache_line) std::atomic<bool> m_splitreq;
