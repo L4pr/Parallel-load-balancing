@@ -194,16 +194,14 @@ class lace_deque : impl::immovable<lace_deque<T>> {
           return {.code = err::none, .val = tmp};
       }
 
-      return this->steal_slow_path(top);
-  }
+      impl::thread_fence_seq_cst();
+      std::ptrdiff_t const bottom = m_worker.bottom.load(acquire);
 
-  LF_NOINLINE auto steal_slow_path(uint32_t top) -> steal_t<T> {
-    std::atomic_thread_fence(std::memory_order_seq_cst);
-    std::ptrdiff_t const bottom = m_worker.bottom.load(acquire); // <--- Now rare
-    if (top < bottom && !m_splitreq.load(relaxed)) {
-      m_splitreq.store(true, relaxed);
-    }
-    return {.code = err::empty};
+      if (top < bottom && !m_splitreq.load(relaxed)) {
+          m_splitreq.store(true, relaxed);
+      }
+
+      return {.code = err::empty, .val = {}};
   }
 
  private:
