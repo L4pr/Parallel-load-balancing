@@ -150,7 +150,6 @@ class lace_deque : impl::immovable<lace_deque<T>> {
 
       m_thief.packed.store(pack(0, 1), relaxed);
 
-
       m_thief.allstolen.store(false, release);
 
       m_worker.o_allstolen = false;
@@ -277,6 +276,9 @@ class lace_deque : impl::immovable<lace_deque<T>> {
           return false;
         }
       }
+
+      m_worker.bottom = 0;
+      m_worker.osplit = 1;
 
       m_thief.allstolen.store(true, release);
       m_worker.o_allstolen = true;

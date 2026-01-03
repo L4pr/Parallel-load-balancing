@@ -134,13 +134,7 @@ class full_context : public worker_context {
    * @brief Add a task to the work queue.
    */
   void push(task_handle task) {
-    // bool was_hidden = this->empty();
-
     m_tasks.push(non_null(task));
-
-    // if (was_hidden) {
-    //   m_notify();
-    // }
   }
 
   /**
