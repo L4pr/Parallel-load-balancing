@@ -149,11 +149,9 @@ class lace_deque : impl::immovable<lace_deque<T>> {
     if (m_worker.o_allstolen) [[unlikely]] {
       uint32_t const bot = static_cast<uint32_t>(m_worker.bottom);
       m_thief.packed.store(pack(bot - 1, bot), release);
-      m_thief.allstolen.store(false, relaxed);
+      m_thief.allstolen.store(false, release);
 
-      if (m_splitreq.load(relaxed)) {
-        m_splitreq.store(false, relaxed);
-      }
+      m_splitreq.store(false, relaxed);
 
       m_worker.osplit = m_worker.bottom;
       m_worker.o_allstolen = false;
@@ -165,7 +163,13 @@ class lace_deque : impl::immovable<lace_deque<T>> {
   template <std::invocable F = return_nullopt<T>>
     requires std::convertible_to<T, std::invoke_result_t<F>>
   constexpr auto pop(F &&when_empty = {}) noexcept(std::is_nothrow_invocable_v<F>) -> std::invoke_result_t<F> {
-      if (m_worker.bottom == 0) return std::invoke(std::forward<F>(when_empty));
+      if (m_worker.bottom == 0) {
+        if (!m_worker.o_allstolen) {
+          m_thief.allstolen.store(true, std::memory_order_release);
+          m_worker.o_allstolen = true;
+        }
+        return std::invoke(std::forward<F>(when_empty));
+      }
 
       if (m_worker.o_allstolen) {
         return pop_stolen(std::forward<F>(when_empty));
@@ -231,7 +235,7 @@ class lace_deque : impl::immovable<lace_deque<T>> {
       do {
           uint32_t top = get_top(old_p);
           new_p = pack(top, static_cast<uint32_t>(new_s));
-      } while (!m_thief.packed.compare_exchange_weak(old_p, new_p, seq_cst, relaxed));
+      } while (!m_thief.packed.compare_exchange_weak(old_p, new_p, release, relaxed));
 
       m_worker.osplit = new_s;
       m_splitreq.store(false, relaxed);
