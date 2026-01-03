@@ -196,7 +196,6 @@ class lace_deque : impl::immovable<lace_deque<T>> {
   }
 
  private:
-  LF_NOINLINE
   constexpr auto grow_shared(const std::ptrdiff_t bottom) noexcept -> void {
       std::ptrdiff_t const new_s = (m_worker.osplit + bottom) >> 1;
 
@@ -211,7 +210,6 @@ class lace_deque : impl::immovable<lace_deque<T>> {
       m_splitreq.store(false, relaxed);
   }
 
-  LF_NOINLINE
   constexpr auto shrink_shared(const std::ptrdiff_t bottom) noexcept -> bool {
       uint64_t old_p = m_packed.load(relaxed);
       uint32_t top = get_top(old_p);
