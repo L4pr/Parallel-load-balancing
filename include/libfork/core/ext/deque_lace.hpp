@@ -142,47 +142,74 @@ class lace_deque : impl::immovable<lace_deque<T>> {
   }
 
   constexpr void push(T const &val) noexcept {
-    std::ptrdiff_t const bottom = m_worker.bottom.load(relaxed);
-    (m_array + mask_index(bottom))->store(val, relaxed);
+    (m_array + mask_index(m_worker.bottom))->store(val, relaxed);
 
-    m_worker.bottom.store(bottom + 1, release);
+    m_worker.head++;
 
-    if (m_splitreq.load(relaxed)) [[unlikely]] {
-      grow_shared(bottom + 1);
+    if (m_worker.o_allstolen) [[unlikely]] {
+      uint32_t const bot = static_cast<uint32_t>(m_worker.bottom);
+      m_thief.packed.store(pack(bot - 1, bot), release);
+      m_thief.allstolen.store(false, relaxed);
+
+      if (m_splitreq.load(relaxed)) {
+        m_splitreq.store(false, relaxed);
+      }
+
+      m_worker.osplit = m_worker.bottom;
+      m_worker.o_allstolen = false;
+    } else if (m_splitreq.load(relaxed)) [[unlikely]] {
+      grow_shared(m_worker.head);
     }
   }
 
   template <std::invocable F = return_nullopt<T>>
     requires std::convertible_to<T, std::invoke_result_t<F>>
   constexpr auto pop(F &&when_empty = {}) noexcept(std::is_nothrow_invocable_v<F>) -> std::invoke_result_t<F> {
+      if (m_worker.bottom == 0) return std::invoke(std::forward<F>(when_empty));
 
-      const std::ptrdiff_t bottom = m_worker.bottom.load(relaxed) - 1;
-      m_worker.bottom.store(bottom, relaxed);
-
-      if (bottom >= m_worker.osplit ) [[likely]] {
-          return (m_array + mask_index(bottom))->load(relaxed);
+      if (m_worker.o_allstolen) {
+        return pop_stolen(std::forward<F>(when_empty));
       }
 
-      if (shrink_shared(bottom)) {
-          return (m_array + mask_index(bottom))->load(relaxed);
+      if (m_worker.osplit == m_worker.bottom) {
+        if (shrink_shared()) {
+          return pop_stolen(std::forward<F>(when_empty));
+        }
       }
 
-      m_worker.bottom.store(bottom + 1, relaxed);
+      m_worker.bottom--;
+      T val = (m_array + mask_index(m_worker.bottom))->load(relaxed);
+
+      if (m_splitreq.load(relaxed)) [[unlikely]] {
+        grow_shared(m_worker.bottom);
+      }
+
+      return val;
+  }
+
+  template <typename F>
+  constexpr auto pop_stolen(F&& when_empty) -> std::invoke_result_t<F> {
+      m_worker.head--;
+
+      if (!m_worker.o_allstolen) {
+        m_thief.allstolen.store(true, relaxed);
+        m_worker.o_allstolen = true;
+      }
+
       return std::invoke(std::forward<F>(when_empty));
   }
 
   [[nodiscard]] constexpr auto steal() noexcept -> steal_t<T> {
-      uint64_t old_p = m_packed.load(acquire);
+      if (m_thief.allstolen.load(acquire)) return {.code = err::empty};
 
+      uint64_t old_p = m_thief.packed.load(std::memory_order_acquire);
       uint32_t top = get_top(old_p);
       uint32_t split = get_split(old_p);
 
       if (top < split) {
           T tmp = (m_array + mask_index(top))->load(relaxed);
 
-          uint64_t new_p = pack(top + 1, split);
-
-          if (!m_packed.compare_exchange_strong(old_p, new_p, std::memory_order_acq_rel, relaxed)) {
+          if (!m_packed.compare_exchange_strong(old_p, pack(top + 1, split), std::memory_order_acq_rel, relaxed)) {
               return {.code = err::lost, .val = {}};
           }
           return {.code = err::none, .val = tmp};
@@ -197,9 +224,9 @@ class lace_deque : impl::immovable<lace_deque<T>> {
 
  private:
   constexpr auto grow_shared(const std::ptrdiff_t bottom) noexcept -> void {
-      std::ptrdiff_t const new_s = (m_worker.osplit + bottom) >> 1;
+      std::ptrdiff_t const new_s = (m_worker.osplit + bottom + 1) >> 1;
 
-      uint64_t old_p = m_packed.load(relaxed);
+      uint64_t old_p = m_thief.packed.load(relaxed);
       uint64_t new_p;
       do {
           uint32_t top = get_top(old_p);
@@ -211,34 +238,37 @@ class lace_deque : impl::immovable<lace_deque<T>> {
   }
 
   constexpr auto shrink_shared(const std::ptrdiff_t bottom) noexcept -> bool {
-      uint64_t old_p = m_packed.load(relaxed);
+      uint64_t old_p = m_thief.packed.load(relaxed);
       uint32_t top = get_top(old_p);
       uint32_t split = get_split(old_p);
 
-      if (top == split) return false;
+      if (top != split) {
+        uint32_t new_split_val = (split + top) >> 1;
 
-      uint32_t new_split_val = (split + top) >> 1;
-      if (new_split_val == split) new_split_val = top;
+        if (!m_thief.packed.compare_exchange_strong(old_p, new_p, relaxed)) {
+          top = get_top(old_p);
+          split = get_split(old_p);
+        }
 
-      uint64_t new_p;
-      do {
-          uint32_t current_top = get_top(old_p);
-          new_p = pack(current_top, new_split_val);
-      } while (!m_packed.compare_exchange_weak(old_p, new_p, relaxed, relaxed));
+        m_worker.osplit = static_cast<std::ptrdiff_t>(new_split_val);
 
-      m_worker.osplit = static_cast<std::ptrdiff_t>(new_split_val);
+        impl::thread_fence_seq_cst();
 
-      impl::thread_fence_seq_cst();
+        old_p = m_thief.packed.load(relaxed);
+        top = get_top(old_p);
 
-      uint64_t fresh_p = m_packed.load(relaxed);
-      uint32_t fresh_top = get_top(fresh_p);
-
-      if (fresh_top > new_split_val) {
-        m_worker.osplit = static_cast<std::ptrdiff_t>(fresh_top);
+        if (top != new_split_val) {
+          if t > new_split_val {
+            m_worker.osplit = static_cast<std::ptrdiff_t>(t);
+          }
+          return false;
+        }
       }
 
-      return bottom >= m_worker.osplit;
-  }
+      m_thief.allstolen.store(true, release);
+      m_worker.o_allstolen = true;
+      return true;
+    }
 
   [[nodiscard]] std::size_t mask_index(std::ptrdiff_t idx) const noexcept {
       return static_cast<std::size_t>(idx) & static_cast<std::size_t>(m_mask);
@@ -248,13 +278,17 @@ class lace_deque : impl::immovable<lace_deque<T>> {
   const std::ptrdiff_t m_mask;
   const std::ptrdiff_t m_capacity;
 
-  alignas(k_cache_line) std::atomic<uint64_t> m_packed;
+  alignas(k_cache_line) {
+    std::atomic<uint64_t> m_packed;
+    std::atomic<bool> allstolen{false}
+  } m_thief;
 
   alignas(k_cache_line) std::atomic<bool> m_splitreq;
 
   struct alignas(k_cache_line) {
-    std::atomic<std::ptrdiff_t> bottom{0};
+    std::ptrdiff_t bottom{0};
     std::ptrdiff_t osplit{0};
+    bool o_allstolen{false};
   } m_worker;
 
   // Convenience aliases
