@@ -216,7 +216,7 @@ class lace_deque : impl::immovable<lace_deque<T>> {
       }
 
       if (!m_splitreq.load(relaxed)) {
-          m_splitreq.store(true, relaxed);
+          m_splitreq.store(true, release);
       }
 
       return {.code = err::empty, .val = {}};
