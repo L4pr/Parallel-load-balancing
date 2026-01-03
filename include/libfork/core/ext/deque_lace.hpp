@@ -278,7 +278,7 @@ class lace_deque : impl::immovable<lace_deque<T>> {
   const std::ptrdiff_t m_mask;
   const std::ptrdiff_t m_capacity;
 
-  alignas(k_cache_line) {
+  struct alignas(k_cache_line) {
     std::atomic<uint64_t> m_packed;
     std::atomic<bool> allstolen{false}
   } m_thief;
