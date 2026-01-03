@@ -126,8 +126,8 @@ class lace_deque : impl::immovable<lace_deque<T>> {
   }
 
   [[nodiscard]] constexpr auto ssize() const noexcept -> std::ptrdiff_t {
-      std::ptrdiff_t const bottom = m_worker.bottom.load(relaxed);
-      uint32_t const top = static_cast<uint32_t>(m_packed.load(relaxed));
+      std::ptrdiff_t const bottom = m_worker.bottom;
+      uint32_t const top = static_cast<uint32_t>(m_thief.packed.load(relaxed));
       return std::max(bottom - static_cast<std::ptrdiff_t>(top), std::ptrdiff_t{0});
   }
 
@@ -136,8 +136,8 @@ class lace_deque : impl::immovable<lace_deque<T>> {
   }
 
   [[nodiscard]] constexpr auto empty() const noexcept -> bool {
-      std::ptrdiff_t const bottom = m_worker.bottom.load(relaxed);
-      uint32_t const top = static_cast<uint32_t>(m_packed.load(relaxed));
+      std::ptrdiff_t const bottom = m_worker.bottom;
+      uint32_t const top = static_cast<uint32_t>(m_thief.packed.load(relaxed));
       return static_cast<std::ptrdiff_t>(top) >= bottom;
   }
 
@@ -259,7 +259,7 @@ class lace_deque : impl::immovable<lace_deque<T>> {
         uint32_t fresh_top = get_top(old_p);
 
         if (fresh_top != new_split_val) {
-          if fresh_top > new_split_val {
+          if (fresh_top > new_split_val) {
             m_worker.osplit = static_cast<std::ptrdiff_t>(fresh_top);
           }
           return false;
