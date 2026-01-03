@@ -231,7 +231,7 @@ class lace_deque : impl::immovable<lace_deque<T>> {
       do {
           uint32_t top = get_top(old_p);
           new_p = pack(top, static_cast<uint32_t>(new_s));
-      } while (!m_thief.packed.compare_exchange_weak(old_p, new_p, release, relaxed));
+      } while (!m_thief.packed.compare_exchange_weak(old_p, new_p, seq_cst, relaxed));
 
       m_worker.osplit = new_s;
       m_splitreq.store(false, relaxed);
