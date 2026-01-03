@@ -158,7 +158,7 @@ class lace_deque : impl::immovable<lace_deque<T>> {
       m_worker.osplit = m_worker.bottom;
       m_worker.o_allstolen = false;
     } else if (m_splitreq.load(relaxed)) [[unlikely]] {
-      grow_shared(m_worker.bottom);
+      grow_shared();
     }
   }
 
@@ -181,7 +181,7 @@ class lace_deque : impl::immovable<lace_deque<T>> {
       T val = (m_array + mask_index(m_worker.bottom))->load(relaxed);
 
       if (m_splitreq.load(relaxed)) [[unlikely]] {
-        grow_shared(m_worker.bottom);
+        grow_shared();
       }
 
       return val;
@@ -223,8 +223,8 @@ class lace_deque : impl::immovable<lace_deque<T>> {
   }
 
  private:
-  constexpr auto grow_shared(const std::ptrdiff_t bottom) noexcept -> void {
-      std::ptrdiff_t const new_s = (m_worker.osplit + bottom + 1) >> 1;
+  constexpr auto grow_shared() noexcept -> void {
+      std::ptrdiff_t const new_s = (m_worker.osplit + m_worker.bottom + 1) >> 1;
 
       uint64_t old_p = m_thief.packed.load(relaxed);
       uint64_t new_p;
@@ -237,7 +237,7 @@ class lace_deque : impl::immovable<lace_deque<T>> {
       m_splitreq.store(false, relaxed);
   }
 
-  constexpr auto shrink_shared(const std::ptrdiff_t bottom) noexcept -> bool {
+  constexpr auto shrink_shared() noexcept -> bool {
       uint64_t old_p = m_thief.packed.load(relaxed);
       uint32_t top = get_top(old_p);
       uint32_t split = get_split(old_p);
