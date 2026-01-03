@@ -136,26 +136,35 @@ class lace_deque : impl::immovable<lace_deque<T>> {
   }
 
   [[nodiscard]] constexpr auto empty() const noexcept -> bool {
-      std::ptrdiff_t const bottom = m_worker.bottom;
-      uint32_t const top = static_cast<uint32_t>(m_thief.packed.load(relaxed));
-      return static_cast<std::ptrdiff_t>(top) >= bottom;
+      if (m_worker.o_allstolen) return true;
+      uint32_t const top = m_thief.packed.load(relaxed);
+      return static_cast<std::ptrdiff_t>(top) >= m_worker.bottom;
   }
 
   constexpr void push(T const &val) noexcept {
-    (m_array + mask_index(m_worker.bottom))->store(val, relaxed);
-
-    m_worker.bottom++;
-
     if (m_worker.o_allstolen) [[unlikely]] {
-      uint32_t const bot = static_cast<uint32_t>(m_worker.bottom);
-      m_thief.packed.store(pack(bot - 1, bot), release);
+      m_worker.bottom = 0;
+      m_worker.osplit = 1;
+
+      (m_array + mask_index(0))->store(val, relaxed);
+
+      m_thief.packed.store(pack(0, 1), relaxed);
+
+
       m_thief.allstolen.store(false, release);
+
+      m_worker.o_allstolen = false;
+      m_worker.bottom = 1;
 
       m_splitreq.store(false, relaxed);
 
-      m_worker.osplit = m_worker.bottom;
-      m_worker.o_allstolen = false;
-    } else if (m_splitreq.load(relaxed)) [[unlikely]] {
+      return;
+    }
+
+    (m_array + mask_index(m_worker.bottom))->store(val, relaxed);
+    m_worker.bottom++;
+
+    if (m_splitreq.load(relaxed)) [[unlikely]] {
       grow_shared();
     }
   }
@@ -163,7 +172,7 @@ class lace_deque : impl::immovable<lace_deque<T>> {
   template <std::invocable F = return_nullopt<T>>
     requires std::convertible_to<T, std::invoke_result_t<F>>
   constexpr auto pop(F &&when_empty = {}) noexcept(std::is_nothrow_invocable_v<F>) -> std::invoke_result_t<F> {
-      if (m_worker.bottom == 0) {
+      if (m_worker.bottom <= 0) {
         if (!m_worker.o_allstolen) {
           m_thief.allstolen.store(true, std::memory_order_release);
           m_worker.o_allstolen = true;
@@ -175,7 +184,7 @@ class lace_deque : impl::immovable<lace_deque<T>> {
         return pop_stolen(std::forward<F>(when_empty));
       }
 
-      if (m_worker.osplit == m_worker.bottom) {
+      if (m_worker.bottom <= m_worker.osplit) {
         if (shrink_shared()) {
           return pop_stolen(std::forward<F>(when_empty));
         }
@@ -248,24 +257,19 @@ class lace_deque : impl::immovable<lace_deque<T>> {
 
       if (top != split) {
         uint32_t new_split_val = (split + top) >> 1;
-        uint64_t new_p = pack(top, new_split_val);
 
-        if (!m_thief.packed.compare_exchange_strong(old_p, new_p, relaxed)) {
+        if (!m_thief.packed.compare_exchange_strong(old_p, pack(top, new_split_val), seq_cst, relaxed)) {
           top = get_top(old_p);
-          split = get_split(old_p);
+          new_split_val = top;
         }
 
         m_worker.osplit = static_cast<std::ptrdiff_t>(new_split_val);
 
         impl::thread_fence_seq_cst();
 
-        old_p = m_thief.packed.load(relaxed);
-        uint32_t fresh_top = get_top(old_p);
+        uint32_t fresh_top = get_top(m_thief.packed.load(relaxed));
 
-        if (fresh_top != new_split_val) {
-          if (fresh_top > new_split_val) {
-            m_worker.osplit = static_cast<std::ptrdiff_t>(fresh_top);
-          }
+        if (fresh_top < (uint32_t)m_worker.bottom) {
           return false;
         }
       }
