@@ -142,19 +142,13 @@ class lace_deque : impl::immovable<lace_deque<T>> {
   }
 
   constexpr void push(T const &val) noexcept {
-    // FORCE these into registers locally
-    auto* const arr = this->m_array;
-    auto const mask = this->m_mask;
-    std::ptrdiff_t const b = m_worker.bottom.load(relaxed);
+    std::ptrdiff_t const bottom = m_worker.bottom.load(relaxed);
+    (m_array + mask_index(bottom))->store(val, relaxed);
 
-    // This will now likely compile to one LEA + one MOV
-    (arr + (b & mask))->store(val, relaxed);
-
-    // Publication store
-    m_worker.bottom.store(b + 1, release);
+    m_worker.bottom.store(bottom + 1, release);
 
     if (m_splitreq.load(relaxed)) [[unlikely]] {
-      grow_shared(b + 1);
+      grow_shared(bottom + 1);
     }
   }
 
@@ -194,10 +188,7 @@ class lace_deque : impl::immovable<lace_deque<T>> {
           return {.code = err::none, .val = tmp};
       }
 
-      impl::thread_fence_seq_cst();
-      std::ptrdiff_t const bottom = m_worker.bottom.load(acquire);
-
-      if (top < bottom && !m_splitreq.load(relaxed)) {
+      if (!m_splitreq.load(relaxed)) {
           m_splitreq.store(true, relaxed);
       }
 
