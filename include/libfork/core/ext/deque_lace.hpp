@@ -143,19 +143,18 @@ class lace_deque : impl::immovable<lace_deque<T>> {
 
   constexpr void push(T const &val) noexcept {
     if (m_worker.o_allstolen) [[unlikely]] {
-      m_worker.bottom = 0;
-      m_worker.osplit = 1;
+      uint32_t b = static_cast<uint32_t>(m_worker.bottom);
 
-      (m_array + mask_index(0))->store(val, relaxed);
+      (m_array + mask_index(b))->store(val, std::memory_order_relaxed);
 
-      m_thief.packed.store(pack(0, 1), relaxed);
+      m_thief.packed.store(pack(b, b + 1), std::memory_order_relaxed);
 
-      m_thief.allstolen.store(false, release);
+      m_thief.allstolen.store(false, std::memory_order_release);
 
+      m_worker.osplit = b + 1;
       m_worker.o_allstolen = false;
-      m_worker.bottom = 1;
-
-      m_splitreq.store(false, relaxed);
+      m_worker.bottom = b + 1;
+      m_splitreq.store(false, std::memory_order_relaxed);
 
       return;
     }
