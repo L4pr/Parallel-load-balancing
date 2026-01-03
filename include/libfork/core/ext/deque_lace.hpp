@@ -271,6 +271,9 @@ class lace_deque : impl::immovable<lace_deque<T>> {
         uint32_t fresh_top = get_top(m_thief.packed.load(relaxed));
 
         if (fresh_top < (uint32_t)m_worker.bottom) {
+          if (fresh_top > (uint32_t)m_worker.osplit) {
+            m_worker.osplit = static_cast<std::ptrdiff_t>(fresh_t);
+          }
           return false;
         }
       }
