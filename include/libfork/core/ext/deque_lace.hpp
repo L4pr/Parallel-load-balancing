@@ -36,23 +36,34 @@ namespace lf {
 
 // Virtual memory functions
 namespace impl {
-    inline auto allocate_virtual(std::size_t bytes) -> void* {
-    #if defined(_WIN32) || defined(_WIN64)
-        void* ptr = VirtualAlloc(nullptr, bytes, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
-        return ptr;
-    #else
-        void* ptr = mmap(nullptr, bytes, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-        return (ptr == MAP_FAILED) ? nullptr : ptr;
-    #endif
-    }
+inline auto allocate_virtual(std::size_t bytes) -> void* {
+  #if defined(_WIN32) || defined(_WIN64)
+  void* ptr = VirtualAlloc(nullptr, bytes, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+  #else
+  void* ptr = mmap(nullptr, bytes, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+  if (ptr == MAP_FAILED) ptr = nullptr;
+  #endif
 
-    inline auto deallocate_virtual(void* ptr, std::size_t bytes) -> void {
-    #if defined(_WIN32) || defined(_WIN64)
-        VirtualFree(ptr, 0, MEM_RELEASE);
-    #else
-        munmap(ptr, bytes);
-    #endif
-    }
+  // DEBUG LOGGING
+  if (ptr) {
+    std::fprintf(stderr, ">> ALLOC: %p (size: %zu)\n", ptr, bytes);
+  } else {
+    std::fprintf(stderr, ">> ALLOC FAILED (size: %zu)\n", bytes);
+  }
+
+  return ptr;
+}
+
+inline auto deallocate_virtual(void* ptr, std::size_t bytes) -> void {
+  // DEBUG LOGGING
+  std::fprintf(stderr, "<< FREE : %p (size: %zu)\n", ptr, bytes);
+
+  #if defined(_WIN32) || defined(_WIN64)
+  VirtualFree(ptr, 0, MEM_RELEASE);
+  #else
+  munmap(ptr, bytes);
+  #endif
+}
 }
 
 inline namespace ext {
@@ -81,6 +92,9 @@ class lace_deque : impl::immovable<lace_deque<T>> {
 
  public:
   using value_type = T;
+
+  lace_deque(const lace_deque&) = delete;
+  lace_deque& operator=(const lace_deque&) = delete;
 
   constexpr lace_deque() : lace_deque(k_default_cap) {}
 
