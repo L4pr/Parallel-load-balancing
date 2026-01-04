@@ -1,3 +1,0 @@
-./build/bench/bench/bench_chase_lev   --benchmark_time_unit=ms   --benchmark_filter="fib_libfork"   --benchmark_out_format=json --benchmark_out=data/pc/fib_chase.json   --benchmark_repetitions=3 && \
-./build/bench/bench/bench_blocking   --benchmark_time_unit=ms   --benchmark_filter="fib_libfork"   --benchmark_out_format=json --benchmark_out=data/pc/fib_blocking.json   --benchmark_repetitions=3 && \
-./build/bench/bench/bench_lace   --benchmark_time_unit=ms   --benchmark_filter="fib_libfork"   --benchmark_out_format=json --benchmark_out=data/pc/fib_lace.json   --benchmark_repetitions=3
