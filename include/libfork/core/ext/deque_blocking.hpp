@@ -231,7 +231,7 @@ class blocking_deque : impl::immovable<blocking_deque<T>> {
 
   // Slow path for lock acquisition
   LF_NOINLINE void lock_slow() noexcept {
-      for (int i = 0; i < 16; ++i) {
+      while (true) {
 
           if (!m_flag.test(relaxed)) {
               if (!m_flag.test_and_set(acquire)) return;
@@ -242,16 +242,6 @@ class blocking_deque : impl::immovable<blocking_deque<T>> {
           #else
           std::this_thread::yield();
           #endif
-      }
-
-      while (true) {
-          if (m_flag.test(relaxed)) {
-              m_flag.wait(true, relaxed);
-          }
-
-          if (!m_flag.test_and_set(acquire)) {
-              return;
-          }
       }
   }
 
