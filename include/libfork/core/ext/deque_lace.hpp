@@ -126,7 +126,7 @@ class lace_deque : impl::immovable<lace_deque<T>> {
   }
 
   [[nodiscard]] constexpr auto ssize() const noexcept -> std::ptrdiff_t {
-      std::ptrdiff_t const bottom = m_worker.bottom;
+      std::ptrdiff_t const bottom = static_cast<uint32_t>(m_worker.bottom);
       uint32_t const top = static_cast<uint32_t>(m_thief.packed.load(relaxed));
       return std::max(bottom - static_cast<std::ptrdiff_t>(top), std::ptrdiff_t{0});
   }
@@ -196,9 +196,8 @@ class lace_deque : impl::immovable<lace_deque<T>> {
     --m_worker.bottom;
 
     const uint64_t state = m_thief.packed.load(relaxed);
-    const uint32_t top = get_top(state);
 
-    if (static_cast<std::ptrdiff_t>(top) > m_worker.bottom) {
+    if (static_cast<int32_t>(get_top(state) - static_cast<uint32_t>(m_worker.bottom)) > 0) {
       return pop_stolen(std::forward<F>(when_empty));
     }
 
@@ -266,19 +265,21 @@ class lace_deque : impl::immovable<lace_deque<T>> {
 
       if (top != split) {
 
-        if (const uint32_t new_split_val = (split + top) >> 1U;
+        if (const uint32_t new_split_val = top + ((split - top) >> 1U);
             m_thief.packed.compare_exchange_strong(old_p, pack(top, new_split_val), seq_cst, relaxed)) {
 
           m_worker.osplit = static_cast<std::ptrdiff_t>(new_split_val);
 
           impl::thread_fence_seq_cst();
 
-          if (const uint32_t fresh_top = get_top(m_thief.packed.load(relaxed));
-              fresh_top < static_cast<uint32_t>(m_worker.bottom)) {
-            if (fresh_top > new_split_val) {
+          const uint32_t fresh_top = get_top(m_thief.packed.load(relaxed));
+
+          if (static_cast<int32_t>(fresh_top - static_cast<uint32_t>(m_worker.bottom)) < 0) {
+            if (static_cast<int32_t>(fresh_top - new_split_val) > 0) {
               m_worker.osplit = static_cast<std::ptrdiff_t>(fresh_top);
             }
-            if (m_worker.osplit < m_worker.bottom) {
+
+            if (static_cast<int32_t>(static_cast<uint32_t>(m_worker.osplit) - static_cast<uint32_t>(m_worker.bottom)) < 0) {
               return false;
             }
           }
