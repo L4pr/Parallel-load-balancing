@@ -184,7 +184,7 @@ class lace_deque : impl::immovable<lace_deque<T>> {
   }
 
   template <typename F>
-  auto pop_cold_path(F &&when_empty) noexcept -> std::invoke_result_t<F> {
+  LF_NOINLINE auto pop_cold_path(F &&when_empty) noexcept -> std::invoke_result_t<F> {
     if (m_worker.o_allstolen || m_worker.bottom <= 0) {
       return pop_stolen(std::forward<F>(when_empty));
     }
