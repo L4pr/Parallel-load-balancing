@@ -24,6 +24,10 @@
 
 #include "libfork/core/ext/deque_common.hpp" // For dequeable, steal_t, err, return_nullopt
 
+#if defined(__x86_64__) || defined(_M_X64)
+    #include <immintrin.h>
+#endif
+
 // Platform headers for mmap/VirtualAlloc
 #if defined(_WIN32) || defined(_WIN64)
     #define NOMINMAX
