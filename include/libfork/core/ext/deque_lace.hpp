@@ -24,6 +24,8 @@
 
 #include "libfork/core/ext/deque_common.hpp" // For dequeable, steal_t, err, return_nullopt
 
+#include <libfork/schedule/lazy_pool.hpp>
+
 // Platform headers for mmap/VirtualAlloc
 #if defined(_WIN32) || defined(_WIN64)
     #define NOMINMAX
@@ -265,7 +267,7 @@ class lace_deque : impl::immovable<lace_deque<T>> {
 
       const uint32_t new_split_val = top + ((split - top) >> 1U);
 
-      if (m_thief.packed.compare_exchange_weak(old_p, pack(top, new_split_val), seq_cst, relaxed)) {
+      if (m_thief.packed.compare_exchange_weak(old_p, pack(top, new_split_val), acq_rel, relaxed)) {
 
         int32_t const diff = static_cast<int32_t>(new_split_val - static_cast<uint32_t>(m_worker.bottom));
         m_worker.osplit = m_worker.bottom + static_cast<std::ptrdiff_t>(diff);
@@ -318,6 +320,7 @@ class lace_deque : impl::immovable<lace_deque<T>> {
   static constexpr std::memory_order acquire = std::memory_order_acquire;
   static constexpr std::memory_order release = std::memory_order_release;
   static constexpr std::memory_order seq_cst = std::memory_order_seq_cst;
+  static constexpr std::memory_order acq_rel = std::memory_order_acq_rel;
 };
 
 } // namespace ext
