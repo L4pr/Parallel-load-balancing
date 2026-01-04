@@ -223,32 +223,48 @@ class blocking_deque : impl::immovable<blocking_deque<T>> {
  private:
   // Blocking spinlock acquire (used by Owner)
   LF_FORCEINLINE void lock() noexcept {
-    int expected = 0;
-    if (m_flag.compare_exchange_strong(expected, 1, acquire)) return;
+    if (!m_flag.test_and_set(acquire)) {
+      return;
+    }
+    lock_slow();
+  }
 
-    while (true) {
-      expected = 0;
-      if (m_flag.load(relaxed) == 0) {
-        if (m_flag.compare_exchange_weak(expected, 1, acquire)) return;
+  // Slow path for lock acquisition
+  LF_NOINLINE void lock_slow() noexcept {
+      for (int i = 0; i < 16; ++i) {
+
+          if (!m_flag.test(relaxed)) {
+              if (!m_flag.test_and_set(acquire)) return;
+          }
+
+          #if defined(__x86_64__) || defined(_M_X64)
+          _mm_pause();
+          #else
+          std::this_thread::yield();
+          #endif
       }
 
-      #if defined(__x86_64__) || defined(_M_X64)
-      _mm_pause();
-      #else
-      std::this_thread::yield();
-      #endif
-    }
+      while (true) {
+
+          if (m_flag.test(relaxed)) {
+              m_flag.wait(true, relaxed);
+          }
+
+          if (!m_flag.test_and_set(acquire)) {
+              return;
+          }
+      }
   }
 
   // Non-blocking try-lock (used by Thief)
   LF_FORCEINLINE bool try_lock() noexcept {
-    int expected = 0;
-    return m_flag.compare_exchange_strong(expected, 1, acquire);
+    return !m_flag.test_and_set(acquire);
   }
 
   // Release lock
   LF_FORCEINLINE void unlock() noexcept {
-    m_flag.store(0, release);
+    m_flag.clear(release);
+    m_flag.notify_one();
   }
 
   // Internal helper to check empty without strict memory ordering
@@ -257,8 +273,7 @@ class blocking_deque : impl::immovable<blocking_deque<T>> {
     return m_top.load(relaxed) >= m_bottom.load(relaxed);
   }
 
-  // CAS Lock Flag: 0 = Free, 1 = Locked
-  alignas(impl::k_cache_line) std::atomic<int> m_flag{0};
+  alignas(impl::k_cache_line) std::atomic_flag m_flag = ATOMIC_FLAG_INIT;
 
   alignas(impl::k_cache_line) std::atomic<std::ptrdiff_t> m_top;
   alignas(impl::k_cache_line) std::atomic<std::ptrdiff_t> m_bottom;
@@ -280,6 +295,7 @@ constexpr blocking_deque<T>::blocking_deque(std::ptrdiff_t cap)
       m_bottom(0),
       m_buf(new impl::atomic_ring_buf<T>{cap}) {
   m_garbage.reserve(k_garbage_reserve);
+  m_flag.clear();
 }
 
 template <dequeable T>
