@@ -246,7 +246,7 @@ class lace_deque : impl::immovable<lace_deque<T>> {
       std::ptrdiff_t const new_s = (m_worker.osplit + m_worker.bottom + 1) >> 1U;
 
       uint64_t old_p = m_thief.packed.load(relaxed);
-      uint64_t new_p;
+      uint64_t new_p = 0;
       do {
           new_p = pack(get_top(old_p), static_cast<uint32_t>(new_s));
       } while (!m_thief.packed.compare_exchange_weak(old_p, new_p, release, relaxed));
@@ -279,6 +279,7 @@ class lace_deque : impl::immovable<lace_deque<T>> {
             }
           }
         }
+        return false;
       }
       declare_empty:
         m_thief.allstolen.store(true, release);
