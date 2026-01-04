@@ -221,10 +221,8 @@ class blocking_deque : impl::immovable<blocking_deque<T>> {
   constexpr ~blocking_deque() noexcept;
 
  private:
-  // --- Private Helpers for CAS Lock ---
-
   // Blocking spinlock acquire (used by Owner)
-  void lock() noexcept {
+  LF_FORCEINLINE void lock() noexcept {
     int expected = 0;
     if (m_flag.compare_exchange_strong(expected, 1, acquire)) return;
 
@@ -243,19 +241,19 @@ class blocking_deque : impl::immovable<blocking_deque<T>> {
   }
 
   // Non-blocking try-lock (used by Thief)
-  bool try_lock() noexcept {
+  LF_FORCEINLINE bool try_lock() noexcept {
     int expected = 0;
     return m_flag.compare_exchange_strong(expected, 1, acquire);
   }
 
   // Release lock
-  void unlock() noexcept {
+  LF_FORCEINLINE void unlock() noexcept {
     m_flag.store(0, release);
   }
 
   // Internal helper to check empty without strict memory ordering
   // Useful for the "optimization" checks mentioned in the paper
-  bool empty_relaxed() const noexcept {
+  LF_FORCEINLINE bool empty_relaxed() const noexcept {
     return m_top.load(relaxed) >= m_bottom.load(relaxed);
   }
 
