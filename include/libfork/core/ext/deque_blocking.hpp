@@ -222,7 +222,7 @@ class blocking_deque : impl::immovable<blocking_deque<T>> {
 
  private:
   // Blocking spinlock acquire (used by Owner)
-  LF_FORCEINLINE void lock() noexcept {
+  void lock() noexcept {
     int expected = 0;
     if (m_flag.compare_exchange_strong(expected, 1, acquire)) return;
 
@@ -241,19 +241,19 @@ class blocking_deque : impl::immovable<blocking_deque<T>> {
   }
 
   // Non-blocking try-lock (used by Thief)
-  LF_FORCEINLINE bool try_lock() noexcept {
+  bool try_lock() noexcept {
     int expected = 0;
     return m_flag.compare_exchange_strong(expected, 1, acquire);
   }
 
   // Release lock
-  LF_FORCEINLINE void unlock() noexcept {
+  void unlock() noexcept {
     m_flag.store(0, release);
   }
 
   // Internal helper to check empty without strict memory ordering
   // Useful for the "optimization" checks mentioned in the paper
-  LF_FORCEINLINE bool empty_relaxed() const noexcept {
+  bool empty_relaxed() const noexcept {
     return m_top.load(relaxed) >= m_bottom.load(relaxed);
   }
 
