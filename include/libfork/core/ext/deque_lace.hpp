@@ -218,7 +218,7 @@ class lace_deque : impl::immovable<lace_deque<T>> {
   }
 
   [[nodiscard]] constexpr auto steal() noexcept -> steal_t<T> {
-      if (m_thief.allstolen.load(acquire)) { return {.code = err::empty}; }
+      if (m_thief.allstolen.load(relaxed)) { return {.code = err::empty}; }
 
       uint64_t old_p = m_thief.packed.load(acquire);
       const uint32_t top = get_top(old_p);
@@ -292,7 +292,7 @@ class lace_deque : impl::immovable<lace_deque<T>> {
         return true;
     }
 
-  [[nodiscard]] auto mask_index(std::ptrdiff_t idx) const noexcept -> std::size_t {
+  [[nodiscard]] LF_FORCEINLINE auto mask_index(std::ptrdiff_t idx) const noexcept -> std::size_t {
       return static_cast<std::size_t>(idx) & static_cast<std::size_t>(m_mask);
   }
 
