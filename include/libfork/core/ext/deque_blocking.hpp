@@ -245,7 +245,6 @@ class blocking_deque : impl::immovable<blocking_deque<T>> {
       }
 
       while (true) {
-
           if (m_flag.test(relaxed)) {
               m_flag.wait(true, relaxed);
           }
