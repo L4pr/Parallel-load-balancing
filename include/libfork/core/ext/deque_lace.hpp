@@ -32,6 +32,14 @@
     #include <sys/mman.h>
 #endif
 
+LF_FORCEINLINE static void cpu_relax() noexcept {
+  #if defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)
+    _mm_pause();
+  #else
+    std::this_thread::yield();
+  #endif
+}
+
 namespace lf {
 
 // Virtual memory functions
@@ -222,8 +230,9 @@ class lace_deque : impl::immovable<lace_deque<T>> {
 
       uint64_t old_p = m_thief.packed.load(acquire);
       const uint32_t top = get_top(old_p);
+      const uint32_t split = get_split(old_p);
 
-      if (const uint32_t split = get_split(old_p); top < split) {
+      if (static_cast<int32_t>(split - top) > 0) {
           T tmp = (m_array + mask_index(top))->load(acquire);
 
           if (!m_thief.packed.compare_exchange_strong(old_p, pack(top + 1, split), acq_rel, relaxed)) {
@@ -245,16 +254,27 @@ class lace_deque : impl::immovable<lace_deque<T>> {
 
       uint64_t old_p = m_thief.packed.load(relaxed);
       uint64_t new_p = 0;
-      do {
+      int backoff = 0;
+
+      while (true) {
           new_p = pack(get_top(old_p), static_cast<uint32_t>(new_s));
-      } while (!m_thief.packed.compare_exchange_weak(old_p, new_p, release, relaxed));
+
+          if (m_thief.packed.compare_exchange_weak(old_p, new_p, release, relaxed)) {
+              break;
+          }
+
+          for (int i = 0; i < backoff; ++i) cpu_relax();
+          if (backoff < 16) backoff++;
+      }
 
       m_worker.osplit = new_s;
       m_splitreq.store(false, relaxed);
   }
 
   constexpr auto shrink_shared() noexcept -> bool {
-      uint64_t old_p = m_thief.packed.load(relaxed);
+    uint64_t old_p = m_thief.packed.load(relaxed);
+    int backoff = 0;
+
     while (true) {
       const uint32_t top = get_top(old_p);
       const uint32_t split = get_split(old_p);
@@ -285,6 +305,9 @@ class lace_deque : impl::immovable<lace_deque<T>> {
         }
         break;
       }
+
+      for (int i = 0; i < backoff; ++i) cpu_relax();
+      if (backoff < 16) backoff++;
     }
       declare_empty:
         m_thief.allstolen.store(true, release);

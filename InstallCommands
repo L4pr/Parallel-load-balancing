@@ -6,3 +6,5 @@ git clone -b Renzo_dev --recursive https://github.com/L4pr/Parallel-load-balanci
 ./vcpkg/vcpkg install
 cmake --preset=benchmark-nix -DCMAKE_TOOLCHAIN_FILE=./vcpkg/scripts/buildsystems/vcpkg.cmake -DVCPKG_MANIFEST_FEATURES="benchmark"
 cmake --build build/bench -j $(nproc)
+chmod +x runAllBenchmarks.sh
+./runAllBenchmarks.sh
