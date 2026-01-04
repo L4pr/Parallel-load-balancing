@@ -226,7 +226,7 @@ class lace_deque : impl::immovable<lace_deque<T>> {
       const uint32_t top = get_top(old_p);
 
       if (const uint32_t split = get_split(old_p); top < split) {
-          T tmp = (m_array + mask_index(top))->load(relaxed);
+          T tmp = (m_array + mask_index(top))->load(acquire);
 
           if (!m_thief.packed.compare_exchange_strong(old_p, pack(top + 1, split), std::memory_order_acq_rel, relaxed)) {
               return {.code = err::lost, .val = {}};
