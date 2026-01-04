@@ -223,11 +223,10 @@ class blocking_deque : impl::immovable<blocking_deque<T>> {
  private:
   // Blocking spinlock acquire (used by Owner)
   LF_FORCEINLINE void lock() noexcept {
-    if (!m_flag.test_and_set(acquire)) {
+    if (try_lock()) {
       return;
     }
     while (true) {
-
           if (!m_flag.test(relaxed)) {
               if (!m_flag.test_and_set(acquire)) return;
           }
