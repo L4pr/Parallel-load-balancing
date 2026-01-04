@@ -96,6 +96,44 @@ class lace_deque : impl::immovable<lace_deque<T>> {
   lace_deque(const lace_deque&) = delete;
   lace_deque& operator=(const lace_deque&) = delete;
 
+  lace_deque(lace_deque&& other) noexcept
+    : m_mask(other.m_mask),
+      m_capacity(other.m_capacity)
+  {
+      m_array = other.m_array;
+
+      other.m_array = nullptr;
+
+      m_thief.packed.store(other.m_thief.packed.load(relaxed), relaxed);
+      m_thief.allstolen.store(other.m_thief.allstolen.load(relaxed), relaxed);
+
+      m_worker.bottom = other.m_worker.bottom;
+      m_worker.osplit = other.m_worker.osplit;
+      m_worker.o_allstolen = other.m_worker.o_allstolen;
+
+      m_splitreq.store(other.m_splitreq.load(relaxed), relaxed);
+  }
+
+  lace_deque& operator=(lace_deque&& other) noexcept {
+      if (this != &other) {
+          if (m_array) {
+              impl::deallocate_virtual(m_array, sizeof(std::atomic<T>) * static_cast<std::size_t>(m_capacity));
+          }
+
+          m_array = other.m_array;
+
+          m_thief.packed.store(other.m_thief.packed.load(relaxed), relaxed);
+          m_thief.allstolen.store(other.m_thief.allstolen.load(relaxed), relaxed);
+          m_worker.bottom = other.m_worker.bottom;
+          m_worker.osplit = other.m_worker.osplit;
+          m_worker.o_allstolen = other.m_worker.o_allstolen;
+          m_splitreq.store(other.m_splitreq.load(relaxed), relaxed);
+
+          other.m_array = nullptr;
+      }
+      return *this;
+  }
+
   constexpr lace_deque() : lace_deque(k_default_cap) {}
 
   explicit lace_deque(const std::size_t cap):
@@ -306,8 +344,8 @@ class lace_deque : impl::immovable<lace_deque<T>> {
   }
 
   std::atomic<T>* m_array;
-  const std::ptrdiff_t m_mask;
-  const std::ptrdiff_t m_capacity;
+  std::ptrdiff_t m_mask;
+  std::ptrdiff_t m_capacity;
 
   struct alignas(k_cache_line) {
     std::atomic<uint64_t> packed;
