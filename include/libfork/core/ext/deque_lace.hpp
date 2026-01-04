@@ -255,32 +255,37 @@ class lace_deque : impl::immovable<lace_deque<T>> {
 
   constexpr auto shrink_shared() noexcept -> bool {
       uint64_t old_p = m_thief.packed.load(relaxed);
+    while (true) {
       const uint32_t top = get_top(old_p);
       const uint32_t split = get_split(old_p);
 
-      if (top != split) {
+      if (top == split) {
+        break;
+      }
 
-        if (const uint32_t new_split_val = top + ((split - top) >> 1U);
-            m_thief.packed.compare_exchange_strong(old_p, pack(top, new_split_val), seq_cst, relaxed)) {
+      const uint32_t new_split_val = top + ((split - top) >> 1U);
 
-          auto const diff = static_cast<int32_t>(new_split_val - static_cast<uint32_t>(m_worker.bottom));
-          m_worker.osplit = m_worker.bottom + static_cast<std::ptrdiff_t>(diff);
+      if (m_thief.packed.compare_exchange_weak(old_p, pack(top, new_split_val), seq_cst, relaxed)) {
 
-          impl::thread_fence_seq_cst();
+        int32_t const diff = static_cast<int32_t>(new_split_val - static_cast<uint32_t>(m_worker.bottom));
+        m_worker.osplit = m_worker.bottom + static_cast<std::ptrdiff_t>(diff);
 
-          const uint32_t fresh_top = get_top(m_thief.packed.load(relaxed));
+        impl::thread_fence_seq_cst();
 
-          if (static_cast<int32_t>(fresh_top - static_cast<uint32_t>(m_worker.bottom)) < 0) {
-            if (static_cast<int32_t>(fresh_top - new_split_val) > 0) {
-              m_worker.osplit = static_cast<std::ptrdiff_t>(fresh_top);
-            }
+        const uint32_t fresh_top = get_top(m_thief.packed.load(relaxed));
 
-            if (static_cast<int32_t>(static_cast<uint32_t>(m_worker.osplit) - static_cast<uint32_t>(m_worker.bottom)) < 0) {
-              return false;
-            }
+        if (static_cast<int32_t>(fresh_top - static_cast<uint32_t>(m_worker.bottom)) < 0) {
+          if (static_cast<int32_t>(fresh_top - new_split_val) > 0) {
+            int32_t const top_diff = static_cast<int32_t>(fresh_top - static_cast<uint32_t>(m_worker.bottom));
+            m_worker.osplit = m_worker.bottom + static_cast<std::ptrdiff_t>(top_diff);
+          }
+          if (m_worker.bottom > m_worker.osplit) {
+            return false;
           }
         }
+        break;
       }
+    }
       declare_empty:
         m_thief.allstolen.store(true, release);
         m_worker.o_allstolen = true;
