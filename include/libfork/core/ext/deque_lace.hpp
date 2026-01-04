@@ -264,7 +264,8 @@ class lace_deque : impl::immovable<lace_deque<T>> {
         if (const uint32_t new_split_val = top + ((split - top) >> 1U);
             m_thief.packed.compare_exchange_strong(old_p, pack(top, new_split_val), seq_cst, relaxed)) {
 
-          m_worker.osplit = static_cast<std::ptrdiff_t>(new_split_val);
+          auto const diff = static_cast<int32_t>(new_split_val - static_cast<uint32_t>(m_worker.bottom));
+          m_worker.osplit = m_worker.bottom + static_cast<std::ptrdiff_t>(diff);
 
           impl::thread_fence_seq_cst();
 
