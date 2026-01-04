@@ -137,23 +137,23 @@ class lace_deque : impl::immovable<lace_deque<T>> {
 
   [[nodiscard]] constexpr auto empty() const noexcept -> bool {
       if (m_worker.o_allstolen) return true;
-      uint32_t const top = m_thief.packed.load(relaxed);
+      uint32_t const top = m_thief.packed.load(seq_cst);
       return static_cast<std::ptrdiff_t>(top) >= m_worker.bottom;
   }
 
   constexpr void push(T const &val) noexcept {
     if (m_worker.o_allstolen) [[unlikely]] {
-      uint32_t b = static_cast<uint32_t>(m_worker.bottom);
+      uint32_t bot = static_cast<uint32_t>(m_worker.bottom);
 
-      (m_array + mask_index(b))->store(val, std::memory_order_relaxed);
+      (m_array + mask_index(bot))->store(val, std::memory_order_relaxed);
 
-      m_thief.packed.store(pack(b, b + 1), std::memory_order_relaxed);
+      m_thief.packed.store(pack(bot, bot + 1), std::memory_order_relaxed);
 
       m_thief.allstolen.store(false, std::memory_order_release);
 
-      m_worker.osplit = b + 1;
+      m_worker.osplit = bot + 1;
       m_worker.o_allstolen = false;
-      m_worker.bottom = b + 1;
+      m_worker.bottom = bot + 1;
       m_splitreq.store(false, std::memory_order_relaxed);
 
       return;
