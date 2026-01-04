@@ -143,18 +143,18 @@ class lace_deque : impl::immovable<lace_deque<T>> {
 
   constexpr void push(T const &val) noexcept {
     if (m_worker.o_allstolen) [[unlikely]] {
-      uint32_t bot = static_cast<uint32_t>(m_worker.bottom);
+      const uint32_t bot = static_cast<uint32_t>(m_worker.bottom);
 
-      (m_array + mask_index(bot))->store(val, std::memory_order_relaxed);
+      (m_array + mask_index(bot))->store(val, relaxed);
 
-      m_thief.packed.store(pack(bot, bot + 1), std::memory_order_relaxed);
+      m_thief.packed.store(pack(bot, bot + 1), relaxed);
 
-      m_thief.allstolen.store(false, std::memory_order_release);
+      m_worker.osplit = m_worker.bottom + 1;
+      ++m_worker.bottom;
 
-      m_worker.osplit = bot + 1;
+      m_thief.allstolen.store(false, release);
       m_worker.o_allstolen = false;
-      m_worker.bottom = bot + 1;
-      m_splitreq.store(false, std::memory_order_relaxed);
+      m_splitreq.store(false, relaxed);
 
       return;
     }
@@ -172,7 +172,7 @@ class lace_deque : impl::immovable<lace_deque<T>> {
   constexpr auto pop(F &&when_empty = {}) noexcept(std::is_nothrow_invocable_v<F>) -> std::invoke_result_t<F> {
     if (m_worker.bottom > m_worker.osplit) [[likely]] {
       --m_worker.bottom;
-      T val = (m_array + mask_index(m_worker.bottom))->load(std::memory_order_relaxed);
+      T val = (m_array + mask_index(m_worker.bottom))->load(relaxed);
 
       if (m_splitreq.load(std::memory_order_relaxed)) [[unlikely]] {
         grow_shared();
@@ -201,9 +201,9 @@ class lace_deque : impl::immovable<lace_deque<T>> {
       return pop_stolen(std::forward<F>(when_empty));
     }
 
-    T val = (m_array + mask_index(m_worker.bottom))->load(std::memory_order_relaxed);
+    T val = (m_array + mask_index(m_worker.bottom))->load(relaxed);
 
-    if (m_splitreq.load(std::memory_order_relaxed)) {
+    if (m_splitreq.load(relaxed)) {
       grow_shared();
     }
     return val;
@@ -211,9 +211,8 @@ class lace_deque : impl::immovable<lace_deque<T>> {
 
   template <typename F>
   constexpr auto pop_stolen(F&& when_empty) -> std::invoke_result_t<F> {
-      m_worker.bottom = 0;
-      m_worker.osplit = 1;
-      m_thief.allstolen.store(true, std::memory_order_release);
+      m_worker.osplit = m_worker.bottom;
+      m_thief.allstolen.store(true, release);
       m_worker.o_allstolen = true;
       return std::invoke(std::forward<F>(when_empty));
   }
@@ -221,7 +220,7 @@ class lace_deque : impl::immovable<lace_deque<T>> {
   [[nodiscard]] constexpr auto steal() noexcept -> steal_t<T> {
       if (m_thief.allstolen.load(acquire)) { return {.code = err::empty}; }
 
-      uint64_t old_p = m_thief.packed.load(std::memory_order_acquire);
+      uint64_t old_p = m_thief.packed.load(acquire);
       const uint32_t top = get_top(old_p);
 
       if (const uint32_t split = get_split(old_p); top < split) {
@@ -286,7 +285,6 @@ class lace_deque : impl::immovable<lace_deque<T>> {
       declare_empty:
         m_thief.allstolen.store(true, release);
         m_worker.o_allstolen = true;
-        m_worker.bottom = 0;
         return true;
     }
 
