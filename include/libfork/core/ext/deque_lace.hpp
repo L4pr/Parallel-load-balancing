@@ -77,7 +77,7 @@ struct TopSplit {
 template <dequeable T>
 class lace_deque : impl::immovable<lace_deque<T>> {
   static constexpr std::size_t k_cache_line = 128;
-  static constexpr std::size_t k_default_cap = 1 << 20;
+  static constexpr std::size_t k_default_cap = 1 << 24;
 
  public:
   using value_type = T;
@@ -280,7 +280,6 @@ class lace_deque : impl::immovable<lace_deque<T>> {
             }
           }
         }
-        return false;
       }
       declare_empty:
         m_thief.allstolen.store(true, release);
