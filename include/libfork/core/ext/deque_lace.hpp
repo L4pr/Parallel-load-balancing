@@ -128,7 +128,7 @@ class lace_deque : impl::immovable<lace_deque<T>> {
   }
 
   constexpr void push(T const &val) noexcept {
-    LF_ASSERT(m_worker.bottom - m_top.load(relaxed) < m_capacity, "Deque Overflow!");
+    LF_ASSERT(m_worker.bottom - m_top.load(relaxed) < m_capacity);
     if (m_worker.o_allstolen) [[unlikely]] {
       const uint32_t bot = static_cast<uint32_t>(m_worker.bottom);
 
