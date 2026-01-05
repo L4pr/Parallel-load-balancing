@@ -217,7 +217,7 @@ class lace_deque : impl::immovable<lace_deque<T>> {
           T tmp = (m_array + mask_index(t))->load(acquire);
 
           // Contend ONLY on m_top. 's' is not involved in the CAS.
-          if (!m_top.compare_exchange_strong(const_cast<uint32_t&>(t), t + 1, acq_rel, relaxed)) {
+          if (!m_top.compare_exchange_strong(const_cast<uint32_t&>(t), t + 1, seq_cst, relaxed)) {
               return {.code = err::lost, .val = {}};
           }
           return {.code = err::none, .val = tmp};
@@ -245,35 +245,33 @@ class lace_deque : impl::immovable<lace_deque<T>> {
     const uint32_t split = m_split.load(relaxed);
 
     if (top == split) {
-        m_allstolen.store(true, release);
-        m_worker.o_allstolen = true;
-        return true;
+      goto declare_empty;
     }
 
     const uint32_t new_split_val = top + ((split - top) >> 1U);
 
     m_split.store(new_split_val, release);
 
+    std::atomic_thread_fence(std::memory_order_seq_cst);
+
+    const uint32_t fresh_top = m_top.load(acquire);
+
+    if (static_cast<int32_t>(fresh_top - static_cast<uint32_t>(m_worker.bottom)) >= 0) {
+      goto declare_empty;
+    }
+
     int32_t const diff = static_cast<int32_t>(new_split_val - static_cast<uint32_t>(m_worker.bottom));
     m_worker.osplit = m_worker.bottom + static_cast<std::ptrdiff_t>(diff);
 
-    impl::thread_fence_seq_cst();
-
-    const uint32_t fresh_top = m_top.load(relaxed);
-
-    if (static_cast<int32_t>(fresh_top - static_cast<uint32_t>(m_worker.bottom)) < 0) {
-
-      if (static_cast<int32_t>(fresh_top - new_split_val) > 0) {
-        int32_t const top_diff = static_cast<int32_t>(fresh_top - static_cast<uint32_t>(m_worker.bottom));
-        m_worker.osplit = m_worker.bottom + static_cast<std::ptrdiff_t>(top_diff);
-      }
-
-      if (m_worker.bottom > m_worker.osplit) {
-        return false;
-      }
+    if (static_cast<int32_t>(fresh_top - new_split_val) > 0) {
+      int32_t const top_diff = static_cast<int32_t>(fresh_top - static_cast<uint32_t>(m_worker.bottom));
+      m_worker.osplit = m_worker.bottom + static_cast<std::ptrdiff_t>(top_diff);
     }
 
-    m_allstolen.store(true, release);
+    if (m_worker.bottom > m_worker.osplit) return false;
+
+    declare_empty:
+        m_allstolen.store(true, release);
     m_worker.o_allstolen = true;
     return true;
   }
