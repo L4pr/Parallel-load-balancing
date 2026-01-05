@@ -210,9 +210,8 @@ class lace_deque : impl::immovable<lace_deque<T>> {
 
       // Read split first, then top.
       const uint32_t s = m_split.load(acquire);
-      const uint32_t t = m_top.load(acquire);
+      uint32_t t = m_top.load(acquire);
 
-      // Use signed math for wrap-around safety
       if (static_cast<int32_t>(s - t) > 0) {
           T tmp = (m_array + mask_index(t))->load(acquire);
 
@@ -234,7 +233,6 @@ class lace_deque : impl::immovable<lace_deque<T>> {
   constexpr auto grow_shared() noexcept -> void {
       std::ptrdiff_t const new_s = (m_worker.osplit + m_worker.bottom + 1) >> 1U;
 
-      // BLIND WRITE: We do not need a loop. We own m_split.
       m_split.store(static_cast<uint32_t>(new_s), release);
 
       m_worker.osplit = new_s;
@@ -253,10 +251,8 @@ class lace_deque : impl::immovable<lace_deque<T>> {
 
     const uint32_t new_split_val = top + ((split - top) >> 1U);
 
-    // Blind write to shrink the public portion
     m_split.store(new_split_val, release);
 
-    // Reconstruct full 64-bit osplit relative to bottom
     int32_t const diff = static_cast<int32_t>(new_split_val - static_cast<uint32_t>(m_worker.bottom));
     m_worker.osplit = m_worker.bottom + static_cast<std::ptrdiff_t>(diff);
 
@@ -264,16 +260,13 @@ class lace_deque : impl::immovable<lace_deque<T>> {
 
     const uint32_t fresh_top = m_top.load(relaxed);
 
-    // If bottom > fresh_top (there are items effectively)
     if (static_cast<int32_t>(fresh_top - static_cast<uint32_t>(m_worker.bottom)) < 0) {
 
-      // If fresh_top > new_split_val (Thief stole past our new split point)
       if (static_cast<int32_t>(fresh_top - new_split_val) > 0) {
         int32_t const top_diff = static_cast<int32_t>(fresh_top - static_cast<uint32_t>(m_worker.bottom));
         m_worker.osplit = m_worker.bottom + static_cast<std::ptrdiff_t>(top_diff);
       }
 
-      // If we still have private items
       if (m_worker.bottom > m_worker.osplit) {
         return false;
       }

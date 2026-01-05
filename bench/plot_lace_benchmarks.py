@@ -1,14 +1,25 @@
 import json
 import os
 import matplotlib.pyplot as plt
+import numpy as np
+from statistics import median, stdev
 
-# ---------------------------------------------------------
-# Configuration
-# ---------------------------------------------------------
+# ===========================================
+# CONFIGURATION & STYLE SETUP
+# ===========================================
+
+# Try to enable LaTeX rendering. Fallback if texlive isn't installed.
+try:
+    plt.rcParams["text.usetex"] = True
+    plt.rcParams['font.family'] = 'serif'
+except:
+    print("Warning: LaTeX not detected. Falling back to standard fonts.")
+    plt.rcParams["text.usetex"] = False
+
 DATA_DIR = "../data/pc"
-OUTPUT_FILE = "../data/benchmark_comparison.pdf"
+OUTPUT_FILE = "benchmark_comparison.pdf"
 
-# Map readable Benchmark names to the file prefix used in the shell script
+# The 4 Benchmarks to plot (rows in the shell script)
 BENCHMARKS = {
     "Fibonacci": "fib",
     # "UTS": "uts",
@@ -16,144 +27,204 @@ BENCHMARKS = {
     # "Matrix Multiplication": "matmul"
 }
 
-# ---------------------------------------------------------
-# VARIANT CONFIGURATION
-# This dictionary controls the Legend Label.
-# It maps the filename suffix (key) to the Display Label (value).
-# Even if lace_original has no label in the JSON, it gets labeled here.
-# ---------------------------------------------------------
+# The 4 Variants to compare (columns in the shell script)
+# Defining distinct styles for each.
 VARIANTS = {
-    "chase":         {"label": "Chase-Lev",       "color": "#1f77b4", "marker": "o"},
-    "blocking":      {"label": "Blocking",        "color": "#ff7f0e", "marker": "s"},
-    # "lace":          {"label": "Lace (New)",      "color": "#2ca02c", "marker": "^"},
-    # "lace_original": {"label": "Lace (Original)", "color": "#d62728", "marker": "v"}
+    "chase":         {"label": "Chase-Lev",       "c": "#1f77b4", "m": "o", "ls": "-"},
+    "blocking":      {"label": "Blocking",        "c": "#ff7f0e", "m": "s", "ls": "--"},
+    # "lace":          {"label": "Lace (New)",      "c": "#2ca02c", "m": "^", "ls": "-."},
+    # "lace_original": {"label": "Lace (Original)", "c": "#d62728", "m": "v", "ls": ":"}
 }
 
-def load_benchmark_data(filepath):
+# ===========================================
+# HELPER FUNCTIONS
+# ===========================================
+
+def get_stat(data_list):
     """
-    Parses Google Benchmark JSON.
-    It ONLY reads 'real_time' and 'threads'. It ignores internal labels.
+    Calculates median and standard error relative to the median.
+    Adapted from the provided example script.
+    """
+    if not data_list:
+        return 0, 0
+
+    # Use all data points available
+    x = sorted(data_list)
+    n = len(x)
+
+    med = median(x)
+
+    if n > 1:
+        # Standard error of the mean approximation
+        err_abs = stdev(x) / np.sqrt(n)
+        # Relative error for error propagation later
+        err_rel = err_abs / med if med != 0 else 0
+    else:
+        err_abs = 0
+        err_rel = 0
+
+    return med, err_rel
+
+def load_raw_data(filepath):
+    """
+    Reads JSON and collects ALL raw repetition times for each thread count.
+    Returns: {thread_count: [time_rep1, time_rep2, ...]}
     """
     if not os.path.exists(filepath):
-        print(f"Warning: File not found: {filepath}")
+        print(f"!! Missing file: {filepath}")
         return None
 
     try:
         with open(filepath, 'r') as f:
             data = json.load(f)
     except Exception as e:
-        print(f"Error reading {filepath}: {e}")
+        print(f"!! Error reading {filepath}: {e}")
         return None
 
-    results = {}
+    raw_results = {}
 
     for run in data.get("benchmarks", []):
-        # We look for the aggregate 'mean' run
-        is_aggregate = run.get("run_type") == "aggregate" and run.get("aggregate_name") == "mean"
-        if not is_aggregate:
+        # We only want individual iterations, not aggregates
+        if run.get("run_type") == "aggregate":
             continue
 
-        # Extract Thread count
-        # Priority: 'green_threads' (custom) > 'threads' (standard) > default 1
+        # Determine thread count
         if "green_threads" in run:
-            threads = int(run["green_threads"])
+            # Often stored as float in JSON, convert to int
+            threads = int(float(run["green_threads"]) + 0.5)
         else:
             threads = int(run.get("threads", 1))
 
         time_ms = float(run["real_time"])
-        results[threads] = time_ms
 
-    return results
+        if threads not in raw_results:
+            raw_results[threads] = []
+        raw_results[threads].append(time_ms)
 
-def get_baseline_time(all_results):
-    """
-    Finds the fastest single-threaded time across all variants to normalize speedup.
-    """
-    t1_times = []
-    for variant_data in all_results.values():
-        if variant_data and 1 in variant_data:
-            t1_times.append(variant_data[1])
+    return raw_results
 
-    if not t1_times:
-        return None
-    return min(t1_times)
+# ===========================================
+# MAIN PLOTTING LOGIC
+# ===========================================
 
 def main():
-    # Set a nice style
-    plt.style.use('ggplot')
-
-    # Create a 2x2 grid for the 4 benchmarks
-    fig, axs = plt.subplots(2, 2, figsize=(14, 10))
+    # Setup figure with 2x2 grid
+    fig, axs = plt.subplots(2, 2, figsize=(10, 8), sharex=True)
     axs = axs.flatten()
 
     print(f"Reading data from: {DATA_DIR}")
 
-    for i, (bench_name, file_prefix) in enumerate(BENCHMARKS.items()):
-        ax = axs[i]
+    global_max_threads = 0
 
-        # 1. Load data for every variant of this benchmark
-        variant_results = {}
+    for i, (bench_readable_name, file_prefix) in enumerate(BENCHMARKS.items()):
+        ax = axs[i]
+        print(f"Processing {bench_readable_name}...")
+
+        # 1. Load ALL raw data for this benchmark across all variants
+        # Structure: variant_data["chase"][thread_count] = [list of times]
+        variant_raw_data = {}
         for suffix in VARIANTS.keys():
-            # Construct filename: e.g., "fib" + "_" + "lace_original" + ".json"
             filename = f"{file_prefix}_{suffix}.json"
             path = os.path.join(DATA_DIR, filename)
+            raw = load_raw_data(path)
+            if raw:
+                variant_raw_data[suffix] = raw
 
-            # Load the data (ignoring missing labels in JSON)
-            data = load_benchmark_data(path)
+        # 2. Find the Baseline: The absolute fastest median time at T=1
+        # This ensures True Speedup comparison.
+        t1_medians = []
+        for raw in variant_raw_data.values():
+            if 1 in raw:
+                m, _ = get_stat(raw[1])
+                t1_medians.append(m)
 
-            if data:
-                # Sort data by thread count to ensure the line plots correctly
-                variant_results[suffix] = dict(sorted(data.items()))
+        baseline_time_s = min(t1_medians) if t1_medians else None
 
-        # 2. Get baseline (Fastest T=1 time across all 4 files)
-        baseline = get_baseline_time(variant_results)
-
-        if not baseline:
-            ax.text(0.5, 0.5, "No Data", ha='center', va='center')
-            ax.set_title(bench_name)
+        if not baseline_time_s:
+            ax.text(0.5, 0.5, "No T=1 Data Found", ha='center', va='center')
+            ax.set_title(f"\\textit{{{bench_readable_name}}}")
             continue
 
-        # 3. Plot the lines
-        max_threads = 0
-        for suffix, info in VARIANTS.items():
-            data = variant_results.get(suffix)
-            if not data:
-                continue
+        # 3. Process and plot each variant
+        current_max_threads = 0
+        for suffix, style in VARIANTS.items():
+            raw = variant_raw_data.get(suffix)
+            if not raw: continue
 
-            threads = list(data.keys())
-            times = list(data.values())
+            # Sort by thread count
+            sorted_threads = sorted(raw.keys())
+            current_max_threads = max(current_max_threads, max(sorted_threads) if sorted_threads else 0)
 
-            # Calculate Speedup: Baseline / Current_Time
-            speedups = [baseline / t for t in times]
+            x_threads = []
+            y_speedup = []
+            y_errors = []
 
-            max_threads = max(max_threads, max(threads))
+            for t in sorted_threads:
+                med_time, rel_err = get_stat(raw[t])
 
-            # Use the label defined in VARIANTS dictionary
-            ax.plot(threads, speedups,
-                    label=info["label"],
-                    color=info["color"],
-                    marker=info["marker"],
-                    markersize=6, linewidth=2, alpha=0.8)
+                # Calculate Speedup: Baseline / Current
+                speedup = baseline_time_s / med_time
+
+                # Propagate error (simple approximation for division)
+                # Error in speedup = speedup * relative_error_of_time
+                abs_err_speedup = speedup * rel_err
+
+                x_threads.append(t)
+                y_speedup.append(speedup)
+                y_errors.append(abs_err_speedup)
+
+            # Plotting with error bars and styles
+            ax.errorbar(x_threads, y_speedup, yerr=y_errors,
+                        label=style["label"],
+                        color=style["c"],
+                        marker=style["m"],
+                        linestyle=style["ls"],
+                        markersize=5,
+                        capsize=2, alpha=0.9)
+
+        global_max_threads = max(global_max_threads, current_max_threads)
 
         # 4. Add Ideal Scaling Line
-        ax.plot([1, max_threads], [1, max_threads], 'k--', label="Ideal Linear", alpha=0.3)
+        ax.plot([1, current_max_threads], [1, current_max_threads],
+                color='black', linestyle=':', linewidth=1, alpha=0.5, label="Ideal")
 
-        # 5. Styling
-        ax.set_title(bench_name, fontsize=12, fontweight='bold')
-        ax.set_xlabel("Threads")
-        ax.set_ylabel("Relative Speedup")
-        ax.legend(fontsize=10)
-        ax.grid(True, which='both', linestyle='--', alpha=0.7)
+        # 5. Axes Styling per subplot
+        ax.set_title(f"\\textit{{{bench_readable_name}}}")
+        ax.grid(True, which='major', linestyle='--', alpha=0.5)
+        ax.set_ylim(bottom=0)
+        ax.set_xlim(left=0.5)
 
-        # Keep axes tight but readable
-        ax.set_xlim(0, max_threads * 1.05)
-        ax.set_ylim(0, max_threads * 1.1)
+    # ===========================================
+    # GLOBAL FIGURE STYLING
+    # ===========================================
 
-    plt.suptitle("Libfork vs Lace: Relative Speedup Comparison", fontsize=16)
-    plt.tight_layout(rect=[0, 0.03, 1, 0.95])
+    # Set standard ticks if we found data
+    if global_max_threads > 0:
+        # Create sensible ticks, e.g., 1, 10, 20, 30... up to max
+        ticks = [1] + list(range(10, global_max_threads + 5, 10))
+        for ax in axs:
+            ax.set_xticks(ticks)
+            ax.set_xlim(0, global_max_threads * 1.05)
+
+    # Shared labels using LaTeX bold
+    fig.supxlabel("\\textbf{Cores}", y=0.02)
+    fig.supylabel("\\textbf{Speedup}", x=0.02)
+
+    # Shared Legend at the top
+    # We grab handles/labels from the last plotted axis
+    handles, labels = axs[-1].get_legend_handles_labels()
+    # Filter out 'Ideal' line from legend if desired, or keep it. Let's keep it.
+    fig.legend(handles, labels,
+               loc="upper center",
+               bbox_to_anchor=(0.5, 0.98),
+               ncol=5,
+               frameon=False, fontsize=11)
+
+    # Adjust layout to make room for legend and labels
+    plt.tight_layout(rect=[0.03, 0.05, 1, 0.92])
 
     print(f"Saving plot to {OUTPUT_FILE}...")
-    plt.savefig(OUTPUT_FILE)
+    plt.savefig(OUTPUT_FILE, dpi=300)
     print("Done.")
 
 if __name__ == "__main__":
