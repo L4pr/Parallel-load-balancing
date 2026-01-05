@@ -69,7 +69,12 @@ class lace_deque : impl::immovable<lace_deque<T>> {
 
   explicit lace_deque(const std::size_t cap):
     m_mask(static_cast<std::ptrdiff_t>(cap) - 1),
-    m_capacity(static_cast<std::ptrdiff_t>(cap)) {
+    m_capacity(static_cast<std::ptrdiff_t>(cap)),
+    m_top(0),
+    m_split(0),
+    m_allstolen(false),
+    m_splitreq(false)
+    {
 
       if (cap > static_cast<std::size_t>(std::numeric_limits<std::ptrdiff_t>::max())) {
           throw std::length_error("Capacity too large");
@@ -89,10 +94,6 @@ class lace_deque : impl::immovable<lace_deque<T>> {
       for (std::size_t i = 0; i < bytes; i += 4096) {
         touch_ptr[i] = 0;
       }
-
-      m_top.store(0, relaxed);
-      m_split.store(0, relaxed);
-      m_splitreq.store(false, relaxed);
 
       m_worker.bottom = 0;
       m_worker.osplit = 0;
@@ -132,6 +133,7 @@ class lace_deque : impl::immovable<lace_deque<T>> {
 
       (m_array + mask_index(bot))->store(val, relaxed);
 
+      // Reset top and split
       m_top.store(bot, relaxed);
       m_split.store(bot + 1, relaxed);
 
@@ -205,13 +207,16 @@ class lace_deque : impl::immovable<lace_deque<T>> {
 
   [[nodiscard]] constexpr auto steal() noexcept -> steal_t<T> {
       if (m_allstolen.load(relaxed)) { return {.code = err::empty}; }
-.
+
+      // Read split first, then top.
       const uint32_t s = m_split.load(acquire);
       const uint32_t t = m_top.load(acquire);
 
+      // Use signed math for wrap-around safety
       if (static_cast<int32_t>(s - t) > 0) {
           T tmp = (m_array + mask_index(t))->load(acquire);
 
+          // Contend ONLY on m_top. 's' is not involved in the CAS.
           if (!m_top.compare_exchange_strong(const_cast<uint32_t&>(t), t + 1, acq_rel, relaxed)) {
               return {.code = err::lost, .val = {}};
           }
@@ -229,6 +234,7 @@ class lace_deque : impl::immovable<lace_deque<T>> {
   constexpr auto grow_shared() noexcept -> void {
       std::ptrdiff_t const new_s = (m_worker.osplit + m_worker.bottom + 1) >> 1U;
 
+      // BLIND WRITE: We do not need a loop. We own m_split.
       m_split.store(static_cast<uint32_t>(new_s), release);
 
       m_worker.osplit = new_s;
@@ -240,13 +246,17 @@ class lace_deque : impl::immovable<lace_deque<T>> {
     const uint32_t split = m_split.load(relaxed);
 
     if (top == split) {
-        goto declare_empty;
+        m_allstolen.store(true, release);
+        m_worker.o_allstolen = true;
+        return true;
     }
 
     const uint32_t new_split_val = top + ((split - top) >> 1U);
 
+    // Blind write to shrink the public portion
     m_split.store(new_split_val, release);
 
+    // Reconstruct full 64-bit osplit relative to bottom
     int32_t const diff = static_cast<int32_t>(new_split_val - static_cast<uint32_t>(m_worker.bottom));
     m_worker.osplit = m_worker.bottom + static_cast<std::ptrdiff_t>(diff);
 
@@ -254,21 +264,25 @@ class lace_deque : impl::immovable<lace_deque<T>> {
 
     const uint32_t fresh_top = m_top.load(relaxed);
 
+    // If bottom > fresh_top (there are items effectively)
     if (static_cast<int32_t>(fresh_top - static_cast<uint32_t>(m_worker.bottom)) < 0) {
+
+      // If fresh_top > new_split_val (Thief stole past our new split point)
       if (static_cast<int32_t>(fresh_top - new_split_val) > 0) {
         int32_t const top_diff = static_cast<int32_t>(fresh_top - static_cast<uint32_t>(m_worker.bottom));
         m_worker.osplit = m_worker.bottom + static_cast<std::ptrdiff_t>(top_diff);
       }
+
+      // If we still have private items
       if (m_worker.bottom > m_worker.osplit) {
         return false;
       }
     }
 
-    declare_empty:
-      m_allstolen.store(true, release);
-      m_worker.o_allstolen = true;
-      return true;
-    }
+    m_allstolen.store(true, release);
+    m_worker.o_allstolen = true;
+    return true;
+  }
 
   [[nodiscard]] LF_FORCEINLINE auto mask_index(std::ptrdiff_t idx) const noexcept -> std::size_t {
       return static_cast<std::size_t>(idx) & static_cast<std::size_t>(m_mask);
@@ -278,11 +292,9 @@ class lace_deque : impl::immovable<lace_deque<T>> {
   const std::ptrdiff_t m_mask;
   const std::ptrdiff_t m_capacity;
 
-  struct alignas(k_cache_line) {
-    std::atomic<uint32_t> m_top;
-    std::atomic<uint32_t> m_split;
-    std::atomic<bool> m_allstolen{false};
-  };
+  alignas(k_cache_line) std::atomic<uint32_t> m_top;
+  std::atomic<uint32_t> m_split;
+  std::atomic<bool> m_allstolen;
 
   alignas(k_cache_line) std::atomic<bool> m_splitreq;
 
