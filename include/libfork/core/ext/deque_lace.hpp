@@ -244,7 +244,11 @@ class lace_deque : impl::immovable<lace_deque<T>> {
     const uint32_t top = m_top.load(relaxed);
     const uint32_t split = m_split.load(relaxed);
 
-    if (top == split) { return true; }
+    if (top == split) {
+      m_allstolen.store(true, release);
+      m_worker.o_allstolen = true;
+      return true;
+    }
 
     const uint32_t new_split_val = top + ((split - top) >> 1U);
     m_split.store(new_split_val, release);
@@ -253,6 +257,8 @@ class lace_deque : impl::immovable<lace_deque<T>> {
     const uint32_t fresh_top = m_top.load(acquire);
 
     if (static_cast<int32_t>(fresh_top - static_cast<uint32_t>(m_worker.bottom)) >= 0) {
+      m_allstolen.store(true, release);
+      m_worker.o_allstolen = true;
       return true;
     }
 
@@ -264,7 +270,13 @@ class lace_deque : impl::immovable<lace_deque<T>> {
       m_worker.osplit = m_worker.bottom + static_cast<std::ptrdiff_t>(top_diff);
     }
 
-    return m_worker.bottom <= m_worker.osplit;
+    if (m_worker.bottom <= m_worker.osplit) {
+      m_allstolen.store(true, release);
+      m_worker.o_allstolen = true;
+      return true;
+    }
+
+    return false;
   }
 
   [[nodiscard]] LF_FORCEINLINE auto mask_index(std::ptrdiff_t idx) const noexcept -> std::size_t {
