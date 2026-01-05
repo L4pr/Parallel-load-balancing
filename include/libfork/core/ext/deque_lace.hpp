@@ -120,7 +120,7 @@ class lace_deque : impl::immovable<lace_deque<T>> {
       m_worker.osplit = static_cast<std::ptrdiff_t>(bot + 1);
       ++m_worker.bottom;
 
-      m_allstolen.store(0, release);
+      m_allstolen.store(0, seq_cst);
       m_worker.o_allstolen = false;
       m_splitreq.store(0, relaxed);
       return;

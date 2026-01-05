@@ -53,6 +53,11 @@ echo "Running Fibonacci..."
     --benchmark_out_format=json --benchmark_out="${OUT_DIR}/fib_lace_original.json" \
     --benchmark_repetitions=$REPS
 
+"${BIN_DIR}/bench_chase_lev" \
+    --benchmark_time_unit=ms --benchmark_filter="fib_serial" \
+    --benchmark_out_format=json --benchmark_out="${OUT_DIR}/fib_serial.json" \
+    --benchmark_repetitions=$REPS
+
 # ---------------------------------------------------------
 # 2. UTS (Unbalanced Tree Search)
 # ---------------------------------------------------------
@@ -76,6 +81,11 @@ echo "Running UTS..."
 "${BIN_DIR}/bench_chase_lev" \
     --benchmark_time_unit=ms --benchmark_filter="uts_lace.*T3L" \
     --benchmark_out_format=json --benchmark_out="${OUT_DIR}/uts_lace_original.json" \
+    --benchmark_repetitions=$REPS
+
+"${BIN_DIR}/bench_chase_lev" \
+    --benchmark_time_unit=ms --benchmark_filter="uts_serial.*T3L" \
+    --benchmark_out_format=json --benchmark_out="${OUT_DIR}/uts_serial.json" \
     --benchmark_repetitions=$REPS
 
 # ---------------------------------------------------------
@@ -103,6 +113,11 @@ echo "Running N-Queens..."
     --benchmark_out_format=json --benchmark_out="${OUT_DIR}/nqueens_lace_original.json" \
     --benchmark_repetitions=$REPS
 
+"${BIN_DIR}/bench_chase_lev" \
+    --benchmark_time_unit=ms --benchmark_filter="nqueens_serial" \
+    --benchmark_out_format=json --benchmark_out="${OUT_DIR}/nqueens_serial.json" \
+    --benchmark_repetitions=$REPS
+
 # ---------------------------------------------------------
 # 4. Matrix Multiplication
 # ---------------------------------------------------------
@@ -126,6 +141,11 @@ echo "Running MatMul..."
 "${BIN_DIR}/bench_chase_lev" \
     --benchmark_time_unit=ms --benchmark_filter="matmul_lace" \
     --benchmark_out_format=json --benchmark_out="${OUT_DIR}/matmul_lace_original.json" \
+    --benchmark_repetitions=$REPS
+
+"${BIN_DIR}/bench_chase_lev" \
+    --benchmark_time_unit=ms --benchmark_filter="matmul_serial" \
+    --benchmark_out_format=json --benchmark_out="${OUT_DIR}/matmul_serial.json" \
     --benchmark_repetitions=$REPS
 
 echo "Done! All results saved to ${OUT_DIR}"
