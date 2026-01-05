@@ -244,20 +244,16 @@ class lace_deque : impl::immovable<lace_deque<T>> {
     const uint32_t top = m_top.load(relaxed);
     const uint32_t split = m_split.load(relaxed);
 
-    if (top == split) {
-      goto declare_empty;
-    }
+    if (top == split) { return true; }
 
     const uint32_t new_split_val = top + ((split - top) >> 1U);
-
     m_split.store(new_split_val, release);
 
-    std::atomic_thread_fence(std::memory_order_seq_cst);
-
+    std::atomic_thread_fence(seq_cst);
     const uint32_t fresh_top = m_top.load(acquire);
 
     if (static_cast<int32_t>(fresh_top - static_cast<uint32_t>(m_worker.bottom)) >= 0) {
-      goto declare_empty;
+      return true;
     }
 
     int32_t const diff = static_cast<int32_t>(new_split_val - static_cast<uint32_t>(m_worker.bottom));
@@ -268,16 +264,11 @@ class lace_deque : impl::immovable<lace_deque<T>> {
       m_worker.osplit = m_worker.bottom + static_cast<std::ptrdiff_t>(top_diff);
     }
 
-    if (m_worker.bottom > m_worker.osplit) return false;
-
-    declare_empty:
-        m_allstolen.store(true, release);
-    m_worker.o_allstolen = true;
-    return true;
+    return m_worker.bottom <= m_worker.osplit;
   }
 
   [[nodiscard]] LF_FORCEINLINE auto mask_index(std::ptrdiff_t idx) const noexcept -> std::size_t {
-      return static_cast<std::size_t>(idx) & static_cast<std::size_t>(m_mask);
+      return static_cast<std::size_t>(idx & m_mask);
   }
 
   std::atomic<T>* m_array;
