@@ -99,7 +99,7 @@ class lace_deque : impl::immovable<lace_deque<T>> {
   }
 
   template <typename F>
-  LF_NOINLINE auto pop_cold_path(F&& when_empty) noexcept -> std::invoke_result_t<F>;
+  auto pop_cold_path(F&& when_empty) noexcept -> std::invoke_result_t<F>;
 
   template <typename F>
   constexpr auto pop_empty(F&& when_empty) -> std::invoke_result_t<F>;
@@ -115,7 +115,7 @@ class lace_deque : impl::immovable<lace_deque<T>> {
 
   alignas(k_cache_line) std::atomic<uint64_t> m_tail_split;
 
-  std::atomic<bool> m_allstolen;
+  alignas(k_cache_line) std::atomic<bool> m_allstolen;
   alignas(k_cache_line) std::atomic<bool> m_splitreq;
 
   struct alignas(k_cache_line) {
@@ -131,10 +131,6 @@ class lace_deque : impl::immovable<lace_deque<T>> {
   static constexpr std::memory_order seq_cst = std::memory_order_seq_cst;
 };
 
-// =================================================================================================
-// Implementation
-// =================================================================================================
-
 template <dequeable T>
 constexpr lace_deque<T>::lace_deque() : lace_deque(k_default_cap) {}
 
@@ -148,7 +144,6 @@ lace_deque<T>::lace_deque(const std::size_t cap)
   if (cap > static_cast<std::size_t>(std::numeric_limits<std::ptrdiff_t>::max())) {
     throw std::length_error("Capacity too large");
   }
-  // Enforce Power of 2
   if ((cap & (cap - 1)) != 0) {
     std::abort();
   }
@@ -199,13 +194,10 @@ constexpr auto lace_deque<T>::empty() const noexcept -> bool {
 
 template <dequeable T>
 constexpr void lace_deque<T>::push(T const& val) noexcept {
-  // Case 1: First item
-  if (m_worker.o_allstolen) [[unlikely]] {
+  if (m_worker.o_allstolen) {
     const uint32_t bot = static_cast<uint32_t>(m_worker.bottom);
     (m_array + mask_index(bot))->store(val, relaxed);
 
-    // Initial state: tail=bot, split=bot+1
-    // Task is effectively shared immediately (Lace design choice)
     m_tail_split.store(pack(bot, bot + 1), relaxed);
 
     m_worker.osplit = m_worker.bottom + 1;
@@ -247,32 +239,22 @@ template <dequeable T>
     return {.code = err::empty, .val = {}};
   }
 
-  // 1. Load Packed State
   uint64_t old_v = m_tail_split.load(acquire);
   split_state s = unpack(old_v);
 
-  // 2. Check if work is available in shared area [tail, split)
-  // Logic: (split - tail) > 0 handled by int32_t cast for wrap-safety
   if (static_cast<int32_t>(s.split - s.tail) > 0) {
 
-    // 3. Speculatively load the task
     T tmp = (m_array + mask_index(s.tail))->load(acquire);
 
-    // 4. CAS to increment Tail
-    // We construct a new state with (tail + 1, split).
-    // This CAS will FAIL if the owner concurrently updated 'split', protecting us.
     uint64_t new_v = pack(s.tail + 1, s.split);
 
     if (m_tail_split.compare_exchange_strong(old_v, new_v, release, relaxed)) {
        return {.code = err::none, .val = tmp};
     }
 
-    // CAS failed -> Owner moved split OR another thief stole.
-    // Lace treats this as a lost race.
     return {.code = err::lost, .val = {}};
   }
 
-  // 5. No work found, raise flag
   if (!m_splitreq.load(relaxed)) {
     m_splitreq.store(true, release);
   }
@@ -286,19 +268,17 @@ LF_NOINLINE auto lace_deque<T>::pop_cold_path(F&& when_empty) noexcept -> std::i
     return pop_empty(std::forward<F>(when_empty));
   }
 
-  // Attempt to reclaim work
   if (shrink_shared()) {
     return pop_empty(std::forward<F>(when_empty));
   }
 
-  // Success, we moved osplit back.
   --m_worker.bottom;
 
   // Verify consistency TODO: check if necessary
-  split_state s = unpack(m_tail_split.load(relaxed));
-  if (static_cast<int32_t>(s.tail - static_cast<uint32_t>(m_worker.bottom)) > 0) {
-    return pop_empty(std::forward<F>(when_empty));
-  }
+  // split_state s = unpack(m_tail_split.load(relaxed));
+  // if (static_cast<int32_t>(s.tail - static_cast<uint32_t>(m_worker.bottom)) > 0) {
+  //   return pop_empty(std::forward<F>(when_empty));
+  // }
 
   T val = (m_array + mask_index(m_worker.bottom))->load(relaxed);
 
@@ -322,14 +302,12 @@ constexpr auto lace_deque<T>::shrink_shared() noexcept -> bool {
   uint64_t old_v = m_tail_split.load(relaxed);
   split_state s = unpack(old_v);
 
-  // If already empty
   if (s.tail == s.split) {
     m_allstolen.store(true, release);
     m_worker.o_allstolen = true;
     return true;
   }
 
-  // CAS Loop to update Split
   while (true) {
       s = unpack(old_v);
       if (s.tail == s.split) {
@@ -338,32 +316,23 @@ constexpr auto lace_deque<T>::shrink_shared() noexcept -> bool {
           return true;
       }
 
-      // Calculate new split (Average of tail and split)
       uint32_t new_split_val = s.tail + ((s.split - s.tail) >> 1U);
-
-      // Try to update ONLY split, keeping tail same.
-      // Must use CAS because a thief might update tail.
       uint64_t new_v = pack(s.tail, new_split_val);
 
       if (m_tail_split.compare_exchange_weak(old_v, new_v, release, relaxed)) {
           s.split = new_split_val;
           break;
       }
-      // Retry with refreshed old_v
   }
 
-  // Update private split
   int32_t const diff = static_cast<int32_t>(s.split - static_cast<uint32_t>(m_worker.bottom));
   m_worker.osplit = m_worker.bottom + static_cast<std::ptrdiff_t>(diff);
 
-  // SEQ_CST FENCE: The heart of Lace's correctness
   impl::thread_fence_seq_cst();
 
-  // Re-read to see if we got robbed
   split_state fresh_s = unpack(m_tail_split.load(relaxed));
 
   if (static_cast<int32_t>(fresh_s.tail - s.split) > 0) {
-    // Thieves stole everything up to our new split
     if (static_cast<int32_t>(fresh_s.tail - static_cast<uint32_t>(m_worker.bottom)) >= 0) {
       m_allstolen.store(true, release);
       m_worker.o_allstolen = true;
@@ -374,7 +343,6 @@ constexpr auto lace_deque<T>::shrink_shared() noexcept -> bool {
     m_worker.osplit = m_worker.bottom + static_cast<std::ptrdiff_t>(top_diff);
   }
 
-  // If we successfully reclaimed private tasks
   if (m_worker.bottom > m_worker.osplit) {
     return false;
   }
@@ -388,7 +356,6 @@ template <dequeable T>
 constexpr auto lace_deque<T>::grow_shared() noexcept -> void {
   uint64_t old_v = m_tail_split.load(relaxed);
 
-  // Loop to update split while respecting concurrent tail updates
   while (true) {
       split_state s = unpack(old_v);
 
