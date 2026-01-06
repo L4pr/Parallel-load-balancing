@@ -274,6 +274,8 @@ LF_NOINLINE auto lace_deque<T>::pop_cold_path(F&& when_empty) noexcept -> std::i
 
   --m_worker.bottom;
 
+  impl::thread_fence_seq_cst();
+
   // Verify consistency // TODO: needed?
   split_state s = unpack(m_tail_split.load(relaxed));
   if (static_cast<int32_t>(s.tail - static_cast<uint32_t>(m_worker.bottom)) > 0) {
