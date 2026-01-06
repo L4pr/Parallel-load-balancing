@@ -235,7 +235,7 @@ constexpr auto lace_deque<T>::pop(F&& when_empty) noexcept(std::is_nothrow_invoc
 
 template <dequeable T>
 [[nodiscard]] constexpr auto lace_deque<T>::steal() noexcept -> steal_t<T> {
-  if (m_allstolen.load(relaxed)) {
+  if (m_allstolen.load(acquire)) {
     return {.code = err::empty, .val = {}};
   }
 
