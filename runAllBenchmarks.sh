@@ -34,17 +34,17 @@ echo "---------------------------------------------------------"
 echo "Running Fibonacci..."
 
 "${BIN_DIR}/bench_chase_lev" \
-    --benchmark_time_unit=ms --benchmark_filter="fib_libfork" \
+    --benchmark_time_unit=ms --benchmark_filter="fib_libfork<lazy_pool, numa_strategy::fan>" \
     --benchmark_out_format=json --benchmark_out="${OUT_DIR}/fib_chase.json" \
     --benchmark_repetitions=$REPS
 
 "${BIN_DIR}/bench_blocking" \
-    --benchmark_time_unit=ms --benchmark_filter="fib_libfork" \
+    --benchmark_time_unit=ms --benchmark_filter="fib_libfork<lazy_pool, numa_strategy::fan>" \
     --benchmark_out_format=json --benchmark_out="${OUT_DIR}/fib_blocking.json" \
     --benchmark_repetitions=$REPS
 
 "${BIN_DIR}/bench_lace" \
-    --benchmark_time_unit=ms --benchmark_filter="fib_libfork" \
+    --benchmark_time_unit=ms --benchmark_filter="fib_libfork<lazy_pool, numa_strategy::fan>" \
     --benchmark_out_format=json --benchmark_out="${OUT_DIR}/fib_lace.json" \
     --benchmark_repetitions=$REPS
 
@@ -64,17 +64,17 @@ echo "Running Fibonacci..."
 echo "Running UTS..."
 
 "${BIN_DIR}/bench_chase_lev" \
-    --benchmark_time_unit=ms --benchmark_filter="uts_libfork.*T3L" \
+    --benchmark_time_unit=ms --benchmark_filter="uts_libfork<lazy_pool, numa_strategy::fan>.*T3L" \
     --benchmark_out_format=json --benchmark_out="${OUT_DIR}/uts_chase.json" \
     --benchmark_repetitions=$REPS
 
 "${BIN_DIR}/bench_blocking" \
-    --benchmark_time_unit=ms --benchmark_filter="uts_libfork.*T3L" \
+    --benchmark_time_unit=ms --benchmark_filter="uts_libfork<lazy_pool, numa_strategy::fan>.*T3L" \
     --benchmark_out_format=json --benchmark_out="${OUT_DIR}/uts_blocking.json" \
     --benchmark_repetitions=$REPS
 
 "${BIN_DIR}/bench_lace" \
-    --benchmark_time_unit=ms --benchmark_filter="uts_libfork.*T3L" \
+    --benchmark_time_unit=ms --benchmark_filter="uts_libfork<lazy_pool, numa_strategy::fan>.*T3L" \
     --benchmark_out_format=json --benchmark_out="${OUT_DIR}/uts_lace.json" \
     --benchmark_repetitions=$REPS
 
@@ -94,17 +94,17 @@ echo "Running UTS..."
 echo "Running N-Queens..."
 
 "${BIN_DIR}/bench_chase_lev" \
-    --benchmark_time_unit=ms --benchmark_filter="nqueens_libfork" \
+    --benchmark_time_unit=ms --benchmark_filter="nqueens_libfork<lazy_pool, numa_strategy::fan>" \
     --benchmark_out_format=json --benchmark_out="${OUT_DIR}/nqueens_chase.json" \
     --benchmark_repetitions=$REPS
 
 "${BIN_DIR}/bench_blocking" \
-    --benchmark_time_unit=ms --benchmark_filter="nqueens_libfork" \
+    --benchmark_time_unit=ms --benchmark_filter="nqueens_libfork<lazy_pool, numa_strategy::fan>" \
     --benchmark_out_format=json --benchmark_out="${OUT_DIR}/nqueens_blocking.json" \
     --benchmark_repetitions=$REPS
 
 "${BIN_DIR}/bench_lace" \
-    --benchmark_time_unit=ms --benchmark_filter="nqueens_libfork" \
+    --benchmark_time_unit=ms --benchmark_filter="nqueens_libfork<lazy_pool, numa_strategy::fan>" \
     --benchmark_out_format=json --benchmark_out="${OUT_DIR}/nqueens_lace.json" \
     --benchmark_repetitions=$REPS
 
@@ -124,17 +124,17 @@ echo "Running N-Queens..."
 echo "Running MatMul..."
 
 "${BIN_DIR}/bench_chase_lev" \
-    --benchmark_time_unit=ms --benchmark_filter="matmul_libfork" \
+    --benchmark_time_unit=ms --benchmark_filter="matmul_libfork<lazy_pool, numa_strategy::fan>" \
     --benchmark_out_format=json --benchmark_out="${OUT_DIR}/matmul_chase.json" \
     --benchmark_repetitions=$REPS
 
 "${BIN_DIR}/bench_blocking" \
-    --benchmark_time_unit=ms --benchmark_filter="matmul_libfork" \
+    --benchmark_time_unit=ms --benchmark_filter="matmul_libfork<lazy_pool, numa_strategy::fan>" \
     --benchmark_out_format=json --benchmark_out="${OUT_DIR}/matmul_blocking.json" \
     --benchmark_repetitions=$REPS
 
 "${BIN_DIR}/bench_lace" \
-    --benchmark_time_unit=ms --benchmark_filter="matmul_libfork" \
+    --benchmark_time_unit=ms --benchmark_filter="matmul_libfork<lazy_pool, numa_strategy::fan>" \
     --benchmark_out_format=json --benchmark_out="${OUT_DIR}/matmul_lace.json" \
     --benchmark_repetitions=$REPS
 
