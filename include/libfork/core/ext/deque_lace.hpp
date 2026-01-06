@@ -275,10 +275,10 @@ LF_NOINLINE auto lace_deque<T>::pop_cold_path(F&& when_empty) noexcept -> std::i
   --m_worker.bottom;
 
   // Verify consistency TODO: check if necessary
-  split_state s = unpack(m_tail_split.load(relaxed));
-  if (static_cast<int32_t>(s.tail - static_cast<uint32_t>(m_worker.bottom)) > 0) {
-    return pop_empty(std::forward<F>(when_empty));
-  }
+  // split_state s = unpack(m_tail_split.load(relaxed));
+  // if (static_cast<int32_t>(s.tail - static_cast<uint32_t>(m_worker.bottom)) > 0) {
+  //   return pop_empty(std::forward<F>(when_empty));
+  // }
 
   T val = (m_array + mask_index(m_worker.bottom))->load(relaxed);
 
