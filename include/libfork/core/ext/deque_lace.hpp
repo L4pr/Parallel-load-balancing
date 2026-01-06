@@ -235,7 +235,8 @@ constexpr auto lace_deque<T>::pop(F&& when_empty) noexcept(std::is_nothrow_invoc
 
 template <dequeable T>
 [[nodiscard]] constexpr auto lace_deque<T>::steal() noexcept -> steal_t<T> {
-  if (m_allstolen.load(acquire)) {
+  // TODO: acquire?
+  if (m_allstolen.load(relaxed)) {
     return {.code = err::empty, .val = {}};
   }
 
@@ -274,39 +275,12 @@ LF_NOINLINE auto lace_deque<T>::pop_cold_path(F&& when_empty) noexcept -> std::i
 
   --m_worker.bottom;
 
-  lf::impl::thread_fence_seq_cst();
-
+  // Verify consistency // TODO: needed?
   split_state s = unpack(m_tail_split.load(relaxed));
-
-  // Case 1: Thief definitely stole it (tail moved past bottom)
   if (static_cast<int32_t>(s.tail - static_cast<uint32_t>(m_worker.bottom)) > 0) {
-    ++m_worker.bottom; // Restore bottom!
     return pop_empty(std::forward<F>(when_empty));
   }
 
-  // Case 2: The Last Element Race (tail == bottom)
-  // We must fight for it using CAS.
-  if (s.tail == static_cast<uint32_t>(m_worker.bottom)) {
-    // Try to increment tail to claim the item
-    uint64_t new_v = pack(s.tail + 1, s.split);
-    uint64_t old_v = pack(s.tail, s.split);
-
-    if (m_tail_split.compare_exchange_strong(old_v, new_v, release, relaxed)) {
-      // We won the race! The item is ours.
-      T val = (m_array + mask_index(m_worker.bottom))->load(relaxed);
-      if (m_splitreq.load(relaxed)) {
-        grow_shared();
-      }
-      return val;
-    } else {
-      // We lost the race (thief incremented tail first).
-      ++m_worker.bottom; // Restore bottom!
-      return pop_empty(std::forward<F>(when_empty));
-    }
-  }
-
-  // Case 3: We have plenty of items (tail < bottom)
-  // It is safe to take this item without CAS.
   T val = (m_array + mask_index(m_worker.bottom))->load(relaxed);
 
   if (m_splitreq.load(relaxed)) {
