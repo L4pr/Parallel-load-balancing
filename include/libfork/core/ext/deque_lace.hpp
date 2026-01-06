@@ -187,7 +187,9 @@ constexpr auto lace_deque<T>::capacity() const noexcept -> std::ptrdiff_t { retu
 
 template <dequeable T>
 constexpr auto lace_deque<T>::empty() const noexcept -> bool {
-  return m_allstolen.load(acquire);
+  if (m_worker.o_allstolen) return true;
+  split_state s = unpack(m_tail_split.load(seq_cst));
+  return static_cast<std::ptrdiff_t>(s.tail) >= m_worker.bottom;
 }
 
 template <dequeable T>
@@ -272,7 +274,7 @@ LF_NOINLINE auto lace_deque<T>::pop_cold_path(F&& when_empty) noexcept -> std::i
 
   --m_worker.bottom;
 
-  // Verify consistency
+  // Verify consistency // TODO: needed?
   split_state s = unpack(m_tail_split.load(relaxed));
   if (static_cast<int32_t>(s.tail - static_cast<uint32_t>(m_worker.bottom)) > 0) {
     return pop_empty(std::forward<F>(when_empty));
