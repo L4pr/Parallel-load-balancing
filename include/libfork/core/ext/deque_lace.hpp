@@ -6,12 +6,11 @@
 
 #include <algorithm>
 #include <atomic>
-#include <bit> // std::bit_cast
-#include <concepts>
+#include <bit>
 #include <cstddef>
 #include <cstdint>
-#include <cstdlib> // std::abort
-#include <functional> // std::invoke
+#include <cstdlib>
+#include <functional>
 #include <limits>
 #include <new>
 #include <stdexcept>
@@ -33,14 +32,12 @@
 
 namespace lf {
 
-// Virtual memory functions
 namespace impl {
+
+// Allocate a virtually-contiguous region.
 inline auto allocate_virtual(std::size_t bytes) -> void* {
 #if defined(_WIN32) || defined(_WIN64)
-  // NOTE: This commits the full range. If you want Linux-like "reserve + fault pages",
-  // you can MEM_RESERVE and commit per-page in a touch loop.
-  void* ptr = VirtualAlloc(nullptr, bytes, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
-  return ptr;
+  return VirtualAlloc(nullptr, bytes, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
 #else
   void* ptr = mmap(nullptr, bytes, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
   return (ptr == MAP_FAILED) ? nullptr : ptr;
@@ -55,6 +52,7 @@ inline auto deallocate_virtual(void* ptr, std::size_t bytes) -> void {
   munmap(ptr, bytes);
 #endif
 }
+
 } // namespace impl
 
 inline namespace ext {
@@ -62,23 +60,20 @@ inline namespace ext {
 template <dequeable T>
 class lace_deque : impl::immovable<lace_deque<T>> {
   static constexpr std::size_t k_cache_line = 128;
-  // Default: 16 Million items. Safe within uint32_t limits.
-  static constexpr std::size_t k_default_cap = 1 << 24;
+  static constexpr std::size_t k_default_cap = 1u << 24; // 16M, power-of-two
 
  public:
   using value_type = T;
 
   constexpr lace_deque();
-  explicit lace_deque(const std::size_t cap);
+  explicit lace_deque(std::size_t cap);
   ~lace_deque() noexcept;
 
-  // --- Basic Accessors ---
   [[nodiscard]] constexpr auto size() const noexcept -> std::size_t;
   [[nodiscard]] constexpr auto ssize() const noexcept -> std::ptrdiff_t;
   [[nodiscard]] constexpr auto capacity() const noexcept -> std::ptrdiff_t;
   [[nodiscard]] constexpr auto empty() const noexcept -> bool;
 
-  // --- Operations ---
   constexpr void push(T const& val) noexcept;
 
   template <std::invocable F = return_nullopt<T>>
@@ -88,18 +83,15 @@ class lace_deque : impl::immovable<lace_deque<T>> {
   [[nodiscard]] constexpr auto steal() noexcept -> steal_t<T>;
 
  private:
-  // Packed state: Tail (public bottom) and Split (boundary)
   struct alignas(8) split_state {
     uint32_t tail;
     uint32_t split;
   };
   static_assert(sizeof(split_state) == 8);
 
-  // Safe type-punning via C++20 bit_cast
   static constexpr auto pack(uint32_t t, uint32_t s) noexcept -> uint64_t {
     return std::bit_cast<uint64_t>(split_state{t, s});
   }
-
   static constexpr auto unpack(uint64_t v) noexcept -> split_state {
     return std::bit_cast<split_state>(v);
   }
@@ -112,68 +104,74 @@ class lace_deque : impl::immovable<lace_deque<T>> {
     m_tail_split.store(pack(t, s), mo);
   }
 
-  // Update ONLY split while preserving current tail (CAS-loop to avoid clobbering tail increments).
-  LF_FORCEINLINE void set_split_preserve_tail(uint32_t new_split, std::memory_order mo) noexcept {
+  // Update ONLY split while preserving current tail (CAS loop). Avoids overlapping atomics UB.
+  LF_FORCEINLINE void set_split_preserve_tail(uint32_t new_split, std::memory_order succ_mo) noexcept {
     uint64_t cur = m_tail_split.load(relaxed);
     for (;;) {
       split_state st = unpack(cur);
       uint64_t desired = pack(st.tail, new_split);
-      if (m_tail_split.compare_exchange_weak(cur, desired, mo, relaxed)) {
-        return;
-      }
+      if (m_tail_split.compare_exchange_weak(cur, desired, succ_mo, relaxed)) return;
     }
   }
 
   template <typename F>
-  auto pop_cold_path(F&& when_empty) noexcept -> std::invoke_result_t<F>;
+  LF_NOINLINE auto pop_cold_path(F&& when_empty) noexcept -> std::invoke_result_t<F>;
 
   template <typename F>
   constexpr auto pop_empty(F&& when_empty) -> std::invoke_result_t<F>;
 
-  // Returns true if it determines the deque is empty / fully stolen.
+  // Returns true if fully stolen / empty.
   constexpr auto shrink_shared() noexcept -> bool;
   constexpr auto grow_shared() noexcept -> void;
 
-  [[nodiscard]] LF_FORCEINLINE auto mask_index(std::ptrdiff_t idx) const noexcept -> std::size_t;
+  [[nodiscard]] LF_FORCEINLINE auto mask_index(uint32_t idx) const noexcept -> std::size_t {
+    return static_cast<std::size_t>(idx & m_mask);
+  }
 
+  // Element storage: atomic<T> (requires T lock-free via dequeable concept)
   std::atomic<T>* m_array{nullptr};
-  const std::ptrdiff_t m_mask;
-  const std::ptrdiff_t m_capacity;
+  const uint32_t m_mask;
+  const uint32_t m_capacity;
 
-  // Packed (tail, split) must be updated atomically as a single 64-bit word.
+  // Packed (tail, split) must be a single atomic word (no partial updates).
   alignas(k_cache_line) std::atomic<uint64_t> m_tail_split;
 
+  // Shared flags
   alignas(k_cache_line) std::atomic<bool> m_allstolen;
   alignas(k_cache_line) std::atomic<bool> m_splitreq;
 
+  // Owner-only state (uint32_t to match Lace indexing and avoid signed overflow UB)
   struct alignas(k_cache_line) {
-    std::ptrdiff_t bottom{0};
-    std::ptrdiff_t osplit{0};
+    uint32_t bottom{0};
+    uint32_t osplit{0};
     bool o_allstolen{true};
   } m_worker;
 
-  // Convenience aliases
+  // Orders
   static constexpr std::memory_order relaxed = std::memory_order_relaxed;
   static constexpr std::memory_order acquire = std::memory_order_acquire;
   static constexpr std::memory_order release = std::memory_order_release;
   static constexpr std::memory_order seq_cst = std::memory_order_seq_cst;
 };
 
+// ---- impl ----
+
 template <dequeable T>
 constexpr lace_deque<T>::lace_deque() : lace_deque(k_default_cap) {}
 
 template <dequeable T>
-lace_deque<T>::lace_deque(const std::size_t cap)
-    : m_mask(static_cast<std::ptrdiff_t>(cap) - 1),
-      m_capacity(static_cast<std::ptrdiff_t>(cap)),
+lace_deque<T>::lace_deque(std::size_t cap)
+    : m_mask(static_cast<uint32_t>(cap) - 1u),
+      m_capacity(static_cast<uint32_t>(cap)),
       m_tail_split(pack(0u, 0u)),
       m_allstolen(true),
       m_splitreq(false) {
   static_assert(std::atomic<uint64_t>::is_always_lock_free,
                 "lace_deque requires lock-free 64-bit atomics for packed (tail,split).");
 
-  if (cap > static_cast<std::size_t>(std::numeric_limits<std::ptrdiff_t>::max())) {
-    throw std::length_error("Capacity too large");
+  if (cap == 0) std::abort();
+  if (cap > static_cast<std::size_t>(std::numeric_limits<uint32_t>::max())) {
+    throw std::length_error("Capacity too large for Lace (uint32_t indices)");
   }
   if ((cap & (cap - 1)) != 0) {
     std::abort();
@@ -185,16 +183,17 @@ lace_deque<T>::lace_deque(const std::size_t cap)
 
   m_array = static_cast<std::atomic<T>*>(raw);
 
-  // Pre-fault pages without mutating object bytes (read-only touch).
-  volatile unsigned char sink = 0;
-  volatile unsigned char* touch_ptr = static_cast<volatile unsigned char*>(raw);
+  // Optional prefault: write a byte per page (safe for atomic<T> raw storage because we never
+  // access these bytes as atomic<T> until we start storing values).
+  // If you want to avoid this entirely, remove the loop.
+  volatile unsigned char* p = static_cast<volatile unsigned char*>(raw);
   for (std::size_t i = 0; i < bytes; i += 4096) {
-    sink ^= touch_ptr[i];
+    p[i] = 0;
   }
-  (void)sink;
 
   m_worker.bottom = 0;
   m_worker.osplit = 0;
+  m_worker.o_allstolen = true;
 }
 
 template <dequeable T>
@@ -211,35 +210,38 @@ constexpr auto lace_deque<T>::size() const noexcept -> std::size_t {
 
 template <dequeable T>
 constexpr auto lace_deque<T>::ssize() const noexcept -> std::ptrdiff_t {
-  std::ptrdiff_t const bottom = m_worker.bottom;
-  split_state st = load_state(relaxed);
-  return std::max(bottom - static_cast<std::ptrdiff_t>(st.tail), std::ptrdiff_t{0});
+  uint32_t const bottom = m_worker.bottom;
+  uint32_t const tail = load_state(relaxed).tail;
+  if (bottom <= tail) return 0;
+  return static_cast<std::ptrdiff_t>(bottom - tail);
 }
 
 template <dequeable T>
 constexpr auto lace_deque<T>::capacity() const noexcept -> std::ptrdiff_t {
-  return m_capacity;
+  return static_cast<std::ptrdiff_t>(m_capacity);
 }
 
 template <dequeable T>
 constexpr auto lace_deque<T>::empty() const noexcept -> bool {
   if (m_worker.o_allstolen) return true;
   split_state st = load_state(seq_cst);
-  return static_cast<std::ptrdiff_t>(st.tail) >= m_worker.bottom;
+  return st.tail >= m_worker.bottom;
 }
 
 template <dequeable T>
 constexpr void lace_deque<T>::push(T const& val) noexcept {
   if (m_worker.o_allstolen) {
-    const uint32_t bot = static_cast<uint32_t>(m_worker.bottom);
+    uint32_t const bot = m_worker.bottom;
 
     (m_array + mask_index(bot))->store(val, relaxed);
 
-    // Publish (tail, split) after writing the task.
-    store_state(bot, bot + 1, release);
+    // Publish state after element write:
+    // - thieves do acquire-load of (tail,split)
+    // - so this release-store ensures the element is visible.
+    store_state(bot, bot + 1u, release);
 
-    m_worker.osplit = m_worker.bottom + 1;
-    ++m_worker.bottom;
+    m_worker.osplit = bot + 1u;
+    m_worker.bottom = bot + 1u;
 
     m_allstolen.store(false, release);
     m_worker.o_allstolen = false;
@@ -247,8 +249,9 @@ constexpr void lace_deque<T>::push(T const& val) noexcept {
     return;
   }
 
-  (m_array + mask_index(m_worker.bottom))->store(val, relaxed);
-  ++m_worker.bottom;
+  uint32_t const bot = m_worker.bottom;
+  (m_array + mask_index(bot))->store(val, relaxed);
+  m_worker.bottom = bot + 1u;
 
   if (m_splitreq.load(relaxed)) [[unlikely]] {
     grow_shared();
@@ -260,8 +263,10 @@ template <std::invocable F>
   requires std::convertible_to<T, std::invoke_result_t<F>>
 constexpr auto lace_deque<T>::pop(F&& when_empty) noexcept(std::is_nothrow_invocable_v<F>) -> std::invoke_result_t<F> {
   if (m_worker.bottom > m_worker.osplit) [[likely]] {
-    --m_worker.bottom;
-    T val = (m_array + mask_index(m_worker.bottom))->load(relaxed);
+    uint32_t bot = m_worker.bottom - 1u;
+    m_worker.bottom = bot;
+
+    T val = (m_array + mask_index(bot))->load(relaxed);
 
     if (m_splitreq.load(relaxed)) [[unlikely]] {
       grow_shared();
@@ -280,15 +285,14 @@ template <dequeable T>
   uint64_t old_v = m_tail_split.load(acquire);
   split_state st = unpack(old_v);
 
-  if ((static_cast<int32_t>(st.split) - static_cast<int32_t>(st.tail)) > 0) {
-    // After observing split>tail with acquire, task publication is visible.
+  if (st.tail < st.split) {
+    // Seeing split>tail under acquire is enough to see the element store.
     T tmp = (m_array + mask_index(st.tail))->load(relaxed);
 
-    uint64_t new_v = pack(st.tail + 1, st.split);
-    if (m_tail_split.compare_exchange_strong(old_v, new_v, std::memory_order_acq_rel, relaxed)) {
+    uint64_t new_v = pack(st.tail + 1u, st.split);
+    if (m_tail_split.compare_exchange_strong(old_v, new_v, std::memory_order_acq_rel, acquire)) {
       return {.code = err::none, .val = tmp};
     }
-
     return {.code = err::lost, .val = {}};
   }
 
@@ -301,7 +305,7 @@ template <dequeable T>
 template <dequeable T>
 template <typename F>
 LF_NOINLINE auto lace_deque<T>::pop_cold_path(F&& when_empty) noexcept -> std::invoke_result_t<F> {
-  if (m_worker.o_allstolen || m_worker.bottom <= 0) {
+  if (m_worker.o_allstolen || m_worker.bottom == 0u) {
     return pop_empty(std::forward<F>(when_empty));
   }
 
@@ -309,16 +313,16 @@ LF_NOINLINE auto lace_deque<T>::pop_cold_path(F&& when_empty) noexcept -> std::i
     return pop_empty(std::forward<F>(when_empty));
   }
 
-  --m_worker.bottom;
+  uint32_t bot = m_worker.bottom - 1u;
+  m_worker.bottom = bot;
 
-  // Verify a thief hasn't stolen past our new bottom.
-  split_state st = load_state(relaxed);
-  uint32_t const bot_u = static_cast<uint32_t>(m_worker.bottom);
-  if (static_cast<int32_t>(st.tail - bot_u) > 0) {
+  // If a thief already stole past our bottom, treat as empty.
+  uint32_t const tail = load_state(relaxed).tail;
+  if (tail > bot) {
     return pop_empty(std::forward<F>(when_empty));
   }
 
-  T val = (m_array + mask_index(m_worker.bottom))->load(relaxed);
+  T val = (m_array + mask_index(bot))->load(relaxed);
 
   if (m_splitreq.load(relaxed)) {
     grow_shared();
@@ -337,62 +341,63 @@ constexpr auto lace_deque<T>::pop_empty(F&& when_empty) -> std::invoke_result_t<
 
 template <dequeable T>
 constexpr auto lace_deque<T>::shrink_shared() noexcept -> bool {
+  // Mirror Lace: snapshot tail/split once, shrink split, fence, reread tail, maybe adjust.
   split_state st0 = load_state(relaxed);
+  uint32_t tail = st0.tail;
+  uint32_t split = st0.split;
 
-  // If shared portion is empty and we are here (no private either), it's fully stolen.
-  if (st0.tail == st0.split) {
+  if (tail == split) {
     m_allstolen.store(true, release);
     m_worker.o_allstolen = true;
     return true;
   }
 
-  uint32_t const old_split = st0.split;
+  uint32_t const old_split = split;
+  uint32_t new_split = (tail + split) >> 1U;
 
-  // Move split towards tail (halve shared region).
-  uint32_t new_split = st0.tail + ((st0.split - st0.tail) >> 1U);
-
+  // Move split down. (Relaxed like Lace.)
   set_split_preserve_tail(new_split, relaxed);
-  m_worker.osplit = static_cast<std::ptrdiff_t>(new_split);
+  m_worker.osplit = new_split;
 
-  // Lace requires a full fence here to detect the "tail jumped beyond new split" scenario.
-  std::atomic_thread_fence(seq_cst);
+  // Lace needs a full fence here.
+  impl::thread_fence_seq_cst();
 
-  uint32_t fresh_tail = load_state(relaxed).tail;
+  // Re-read tail after fence.
+  tail = load_state(relaxed).tail;
 
-  if (fresh_tail > new_split) {
-    // Thieves may have stolen beyond our new split; adjust to the final position.
-    // Use the original (old_split) snapshot as the upper bound.
-    new_split = fresh_tail + ((old_split - fresh_tail) >> 1U);
+  // If tail reached old_split, shared region drained => empty.
+  if (tail == old_split) {
+    m_allstolen.store(true, release);
+    m_worker.o_allstolen = true;
+    return true;
+  }
+
+  // If tail jumped beyond our new split, adjust once more using old_split snapshot.
+  if (tail > new_split) {
+    new_split = (tail + old_split) >> 1U;
     set_split_preserve_tail(new_split, relaxed);
-    m_worker.osplit = static_cast<std::ptrdiff_t>(new_split);
+    m_worker.osplit = new_split;
   }
 
-  // If we still have no private work, then we're empty.
-  if (m_worker.bottom > m_worker.osplit) {
-    return false;
-  }
-
-  m_allstolen.store(true, release);
-  m_worker.o_allstolen = true;
-  return true;
+  return false;
 }
 
 template <dequeable T>
 constexpr auto lace_deque<T>::grow_shared() noexcept -> void {
-  // Move split towards bottom (halve private region).
-  std::ptrdiff_t const new_s_val = (m_worker.osplit + m_worker.bottom + 1) >> 1U;
-  uint32_t const new_split = static_cast<uint32_t>(new_s_val);
+  // Mirror Lace: move split towards bottom to make more work stealable.
+  uint32_t const os = m_worker.osplit;
+  uint32_t const bot = m_worker.bottom;
 
-  // Publishing more shared work must be a release to make those tasks visible to thieves.
-  set_split_preserve_tail(new_split, release);
+  if (os < bot) {
+    uint32_t const diff = (bot - os + 1u) >> 1U; // ceil((bot-os)/2)
+    uint32_t const new_split = os + diff;
 
-  m_worker.osplit = new_s_val;
+    // Publishing more shared work must be release.
+    set_split_preserve_tail(new_split, release);
+    m_worker.osplit = new_split;
+  }
+
   m_splitreq.store(false, relaxed);
-}
-
-template <dequeable T>
-[[nodiscard]] LF_FORCEINLINE auto lace_deque<T>::mask_index(std::ptrdiff_t idx) const noexcept -> std::size_t {
-  return static_cast<std::size_t>(idx) & static_cast<std::size_t>(m_mask);
 }
 
 } // namespace ext
