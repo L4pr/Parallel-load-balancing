@@ -64,17 +64,17 @@ echo "Running Fibonacci..."
 echo "Running UTS..."
 
 "${BIN_DIR}/bench_chase_lev" \
-    --benchmark_time_unit=ms --benchmark_filter="uts_libfork<lazy_pool, numa_strategy::fan>.*T3L" \
+    --benchmark_time_unit=ms --benchmark_filter="uts_libfork_alloc_busy_fan.*T3L" \
     --benchmark_out_format=json --benchmark_out="${OUT_DIR}/uts_chase.json" \
     --benchmark_repetitions=$REPS
 
 "${BIN_DIR}/bench_blocking" \
-    --benchmark_time_unit=ms --benchmark_filter="uts_libfork<lazy_pool, numa_strategy::fan>.*T3L" \
+    --benchmark_time_unit=ms --benchmark_filter="uts_libfork_alloc_busy_fan.*T3L" \
     --benchmark_out_format=json --benchmark_out="${OUT_DIR}/uts_blocking.json" \
     --benchmark_repetitions=$REPS
 
 "${BIN_DIR}/bench_lace" \
-    --benchmark_time_unit=ms --benchmark_filter="uts_libfork<lazy_pool, numa_strategy::fan>.*T3L" \
+    --benchmark_time_unit=ms --benchmark_filter="uts_libfork_alloc_busy_fan.*T3L" \
     --benchmark_out_format=json --benchmark_out="${OUT_DIR}/uts_lace.json" \
     --benchmark_repetitions=$REPS
 
