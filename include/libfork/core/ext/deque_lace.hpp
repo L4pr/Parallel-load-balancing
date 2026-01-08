@@ -59,13 +59,13 @@ public:
   // Safe for any thread: conservative but correct.
   auto empty() const noexcept -> bool {
     // Fast: if marked all-stolen, it's empty.
-    if (m_allstolen.load(std::memory_order_acquire)) {
+    if (m_allstolen.load(acquire)) {
       return true;
     }
 
     // Otherwise compute bottom - tail using published atomics.
-    const auto ts = unpack_state(m_tail_split.load(std::memory_order_acquire));
-    const auto bot = m_bottom_pub.load(std::memory_order_acquire);
+    const auto ts = unpack_state(m_tail_split.load(acquire));
+    const auto bot = m_bottom_pub.load(acquire);
 
     // tail and bottom are monotonic uint32 indices.
     // If tail >= bottom, there is no work in this deque.
@@ -73,8 +73,8 @@ public:
   }
 
   auto size() const noexcept -> std::size_t {
-    const auto ts = unpack_state(m_tail_split.load(std::memory_order_acquire));
-    const auto bot = m_bottom_pub.load(std::memory_order_acquire);
+    const auto ts = unpack_state(m_tail_split.load(acquire));
+    const auto bot = m_bottom_pub.load(acquire);
     if (bot <= ts.tail) {
       return 0;
     }
@@ -82,8 +82,8 @@ public:
   }
 
   auto ssize() const noexcept -> std::ptrdiff_t {
-    const auto ts = unpack_state(m_tail_split.load(std::memory_order_acquire));
-    const auto bot = m_bottom_pub.load(std::memory_order_acquire);
+    const auto ts = unpack_state(m_tail_split.load(acquire));
+    const auto bot = m_bottom_pub.load(acquire);
     if (bot <= ts.tail) {
       return 0;
     }
@@ -98,10 +98,10 @@ public:
       --m_owner.bottom;
       publish_bottom_relaxed();
 
-      T val = m_array[idx(m_owner.bottom)].load(std::memory_order_relaxed);
+      T val = m_array[idx(m_owner.bottom)].load(relaxed);
 
       // If a thief asked for work, share some.
-      if (m_splitreq.load(std::memory_order_relaxed)) {
+      if (m_splitreq.load(relaxed)) {
         grow_shared();
       }
       return val;
@@ -121,9 +121,9 @@ public:
     --m_owner.bottom;
     publish_bottom_relaxed();
 
-    T val = m_array[idx(m_owner.bottom)].load(std::memory_order_relaxed);
+    T val = m_array[idx(m_owner.bottom)].load(relaxed);
 
-    if (m_splitreq.load(std::memory_order_relaxed)) {
+    if (m_splitreq.load(relaxed)) {
       grow_shared();
     }
     return val;
@@ -136,27 +136,27 @@ public:
     if (m_owner.o_allstolen) {
       const auto bot = static_cast<std::uint32_t>(m_owner.bottom);
 
-      m_array[idx(m_owner.bottom)].store(val, std::memory_order_relaxed);
+      m_array[idx(m_owner.bottom)].store(val, relaxed);
       ++m_owner.bottom;
       publish_bottom_relaxed();
 
       // Publish (tail, split) = (bot, bot).
       // Use release so any thread seeing this state also sees prior stores.
-      m_tail_split.store(pack_state({bot, bot}), std::memory_order_release);
+      m_tail_split.store(pack_state({bot, bot}), release);
 
       m_owner.osplit = static_cast<std::ptrdiff_t>(bot);
       m_owner.o_allstolen = false;
 
       // Clear flags (release so readers don't see false before init writes).
-      m_splitreq.store(false, std::memory_order_relaxed);
-      m_allstolen.store(false, std::memory_order_release);
+      m_splitreq.store(false, relaxed);
+      m_allstolen.store(false, release);
       return;
     }
 
     // Normal push into private region.
     // (Capacity check is best-effort; indices are monotonic uint32.)
     {
-      const auto ts = unpack_state(m_tail_split.load(std::memory_order_acquire));
+      const auto ts = unpack_state(m_tail_split.load(acquire));
       const auto bot = static_cast<std::uint32_t>(m_owner.bottom);
       if ((bot - ts.tail) >= static_cast<std::uint32_t>(m_capacity)) {
         // Fixed-capacity deque: fail hard rather than silently corrupt.
@@ -164,11 +164,11 @@ public:
       }
     }
 
-    m_array[idx(m_owner.bottom)].store(val, std::memory_order_relaxed);
+    m_array[idx(m_owner.bottom)].store(val, relaxed);
     ++m_owner.bottom;
     publish_bottom_relaxed();
 
-    if (m_splitreq.load(std::memory_order_relaxed)) {
+    if (m_splitreq.load(relaxed)) {
       grow_shared();
     }
   }
@@ -176,16 +176,16 @@ public:
   // Any thread
   auto steal() noexcept -> steal_t<T> {
     // If known empty, bail quickly.
-    if (m_allstolen.load(std::memory_order_acquire)) {
+    if (m_allstolen.load(acquire)) {
       return {err::empty, T{}};
     }
 
-    const auto old = m_tail_split.load(std::memory_order_acquire);
+    const auto old = m_tail_split.load(acquire);
     const auto s = unpack_state(old);
 
     // Nothing shared -> request split to move (owner will share).
     if (s.tail >= s.split) {
-      m_splitreq.store(true, std::memory_order_release);
+      m_splitreq.store(true, release);
       return {err::empty, T{}};
     }
 
@@ -197,14 +197,14 @@ public:
     if (!m_tail_split.compare_exchange_strong(
             expected, desired,
             std::memory_order_acq_rel,
-            std::memory_order_acquire)) {
+            acquire)) {
       return {err::lost, T{}};
     }
 
     // Successfully stole `s.tail`.
     // Acquire keeps it simple and correct w.r.t. owner's release publishing.
     T val = m_array[static_cast<std::ptrdiff_t>(s.tail) & m_mask]
-                .load(std::memory_order_acquire);
+                .load(acquire);
     return {err::none, val};
   }
 
@@ -234,7 +234,7 @@ private:
 
   void publish_bottom_relaxed() noexcept {
     m_bottom_pub.store(static_cast<std::uint32_t>(m_owner.bottom),
-                       std::memory_order_relaxed);
+                       relaxed);
   }
 
   template <typename F>
@@ -242,10 +242,10 @@ private:
       -> std::invoke_result_t<F> {
     // Mark empty for everyone.
     m_owner.o_allstolen = true;
-    m_allstolen.store(true, std::memory_order_release);
+    m_allstolen.store(true, release);
 
     // No pending split requests matter when empty.
-    m_splitreq.store(false, std::memory_order_relaxed);
+    m_splitreq.store(false, relaxed);
 
     // Make bottom visible too.
     publish_bottom_relaxed();
@@ -255,10 +255,10 @@ private:
 
   // Owner-only: share some private work by moving split towards bottom.
   void grow_shared() noexcept {
-    m_splitreq.store(false, std::memory_order_relaxed);
+    m_splitreq.store(false, relaxed);
 
     // Snapshot public (tail, split) and private bottom.
-    const auto old = m_tail_split.load(std::memory_order_acquire);
+    const auto old = m_tail_split.load(acquire);
     const auto s = unpack_state(old);
 
     const auto bot = static_cast<std::uint32_t>(m_owner.bottom);
@@ -274,26 +274,26 @@ private:
     const std::uint32_t new_split = split + diff;
 
     // Update published split (preserving current tail).
-    store_split_blind(new_split, std::memory_order_release);
+    store_split_blind(new_split, release);
 
     m_owner.osplit = static_cast<std::ptrdiff_t>(new_split);
 
     // Definitely not empty.
     m_owner.o_allstolen = false;
-    m_allstolen.store(false, std::memory_order_release);
+    m_allstolen.store(false, release);
   }
 
   // Owner-only: reclaim some shared work by shrinking split towards tail.
   // Returns true iff empty.
   auto shrink_shared() noexcept -> bool {
-    const auto s0 = unpack_state(m_tail_split.load(std::memory_order_relaxed));
+    const auto s0 = unpack_state(m_tail_split.load(relaxed));
     const std::uint32_t tail0 = s0.tail;
     const std::uint32_t split0 = s0.split;
 
     // No shared region at all: empty from owner's POV (no private either here).
     if (tail0 == split0) {
       m_owner.o_allstolen = true;
-      m_allstolen.store(true, std::memory_order_release);
+      m_allstolen.store(true, release);
       return true;
     }
 
@@ -301,41 +301,41 @@ private:
     std::uint32_t newsplit = tail0 + ((split0 - tail0) / 2u);
 
     // Blindly store split to newsplit (preserving whatever tail is now).
-    store_split_blind(newsplit, std::memory_order_relaxed);
+    store_split_blind(newsplit, relaxed);
 
     // Lace uses a strong fence here to serialize with stealers.
-    std::atomic_thread_fence(std::memory_order_seq_cst);
+    impl::thread_fence_seq_cst();
 
     // Re-read tail after fence.
-    const auto s1 = unpack_state(m_tail_split.load(std::memory_order_relaxed));
+    const auto s1 = unpack_state(m_tail_split.load(relaxed));
     const std::uint32_t tail1 = s1.tail;
 
     // If tail reached the old split, everything got stolen while we shrank.
     if (tail1 == split0) {
       m_owner.o_allstolen = true;
-      m_allstolen.store(true, std::memory_order_release);
+      m_allstolen.store(true, release);
       return true;
     }
 
     // If tail raced ahead past our computed newsplit, recompute.
     if (tail1 > newsplit) {
       newsplit = tail1 + ((split0 - tail1) / 2u);
-      store_split_blind(newsplit, std::memory_order_relaxed);
+      store_split_blind(newsplit, relaxed);
     }
 
     m_owner.osplit = static_cast<std::ptrdiff_t>(newsplit);
     m_owner.o_allstolen = false;
-    m_allstolen.store(false, std::memory_order_release);
+    m_allstolen.store(false, release);
     return false;
   }
 
   // Store split = fixed_split while preserving current tail (CAS loop).
   void store_split_blind(std::uint32_t fixed_split, std::memory_order mo) noexcept {
-    std::uint64_t cur = m_tail_split.load(std::memory_order_relaxed);
+    std::uint64_t cur = m_tail_split.load(relaxed);
     for (;;) {
       const auto s = unpack_state(cur);
       const std::uint64_t desired = pack_state({s.tail, fixed_split});
-      if (m_tail_split.compare_exchange_weak(cur, desired, mo, std::memory_order_relaxed)) {
+      if (m_tail_split.compare_exchange_weak(cur, desired, mo, relaxed)) {
         return;
       }
     }
@@ -359,6 +359,11 @@ private:
   alignas(64) std::atomic<std::uint32_t> m_bottom_pub;   // published bottom
   alignas(64) std::atomic<bool> m_allstolen;             // true iff known empty
   alignas(64) std::atomic<bool> m_splitreq;              // thieves request sharing
+
+  static constexpr std::memory_order relaxed = std::memory_order_relaxed;
+  static constexpr std::memory_order acquire = std::memory_order_acquire;
+  static constexpr std::memory_order release = std::memory_order_release;
+  static constexpr std::memory_order seq_cst = std::memory_order_seq_cst;
 };
 
 } // namespace ext
