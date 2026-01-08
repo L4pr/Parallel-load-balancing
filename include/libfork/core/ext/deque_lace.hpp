@@ -174,10 +174,10 @@ lace_deque<T>::lace_deque(const std::size_t cap)
   m_array = static_cast<std::atomic<T>*>(raw);
 
   // Touch pages (helps avoid major faults on first use)
-  volatile char* touch_ptr = static_cast<char*>(raw);
-  for (std::size_t i = 0; i < bytes; i += 4096) {
-    touch_ptr[i] = 0;
-  }
+  // volatile char* touch_ptr = static_cast<char*>(raw);
+  // for (std::size_t i = 0; i < bytes; i += 4096) {
+  //   touch_ptr[i] = 0;
+  // }
 
   m_worker.bottom = 0;
   m_worker.osplit = 0;
@@ -213,10 +213,9 @@ constexpr auto lace_deque<T>::capacity() const noexcept -> std::ptrdiff_t { retu
 template <dequeable T>
 constexpr auto lace_deque<T>::empty() const noexcept -> bool {
   if (m_allstolen.load(acquire)) return true;
-  return false;
-  // split_state s = unpack(m_top_split.load(acquire));
-  // uint32_t const bot = m_bottom.load(acquire);
-  // return s.top >= bot;
+  split_state s = unpack(m_top_split.load(acquire));
+  uint32_t const bot = m_bottom.load(acquire);
+  return s.top >= bot;
 }
 
 template <dequeable T>
