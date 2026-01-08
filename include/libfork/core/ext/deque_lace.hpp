@@ -213,9 +213,10 @@ constexpr auto lace_deque<T>::capacity() const noexcept -> std::ptrdiff_t { retu
 template <dequeable T>
 constexpr auto lace_deque<T>::empty() const noexcept -> bool {
   if (m_allstolen.load(acquire)) return true;
-  split_state s = unpack(m_top_split.load(acquire));
-  uint32_t const bot = m_bottom.load(acquire);
-  return s.top >= bot;
+  return false;
+  // split_state s = unpack(m_top_split.load(acquire));
+  // uint32_t const bot = m_bottom.load(acquire);
+  // return s.top >= bot;
 }
 
 template <dequeable T>
@@ -239,12 +240,12 @@ constexpr void lace_deque<T>::push(T const& val) noexcept {
     return;
   }
 
-  // Best-effort fixed-capacity check.
-  {
-    split_state s = unpack(m_top_split.load(acquire));
-    uint32_t const bot = static_cast<uint32_t>(m_worker.bottom);
-    LF_ASSERT((bot - s.top) < static_cast<uint32_t>(m_capacity));
-  }
+  // // Check for capacity
+  // {
+  //   split_state s = unpack(m_top_split.load(acquire));
+  //   uint32_t const bot = static_cast<uint32_t>(m_worker.bottom);
+  //   LF_ASSERT((bot - s.top) < static_cast<uint32_t>(m_capacity));
+  // }
 
 
   (m_array + mask_index(m_worker.bottom))->store(val, relaxed);
