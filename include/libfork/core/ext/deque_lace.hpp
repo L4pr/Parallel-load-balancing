@@ -109,11 +109,27 @@ class lace_deque : impl::immovable<lace_deque<T>> {
 
   [[nodiscard]] LF_FORCEINLINE auto mask_index(std::ptrdiff_t idx) const noexcept -> std::size_t;
 
+  // View the whole 64-bit integer atomically (for push/pop/steal)
+  // MARKED CONST to allow calling from empty/ssize
+  [[nodiscard]] LF_FORCEINLINE auto atomic_tail_split() const noexcept -> std::atomic_ref<uint64_t> {
+    return std::atomic_ref<uint64_t>(m_tail_split);
+  }
+
+  // View ONLY the upper 32-bit 'Split' half atomically (for shrink/grow)
+  // MARKED CONST to match pattern, though usually called from non-const
+  [[nodiscard]] LF_FORCEINLINE auto atomic_split() const noexcept -> std::atomic_ref<uint32_t> {
+    // Pointer arithmetic to get the address of the upper 32 bits
+    auto* split_ptr = reinterpret_cast<uint32_t*>(reinterpret_cast<char*>(&m_tail_split) + sizeof(uint32_t));
+    return std::atomic_ref<uint32_t>(*split_ptr);
+  }
+
   std::atomic<T>* m_array;
   const std::ptrdiff_t m_mask;
   const std::ptrdiff_t m_capacity;
 
-  alignas(k_cache_line) std::atomic<uint64_t> m_tail_split;
+  // Raw storage accessed via atomic_ref
+  // MARKED MUTABLE to allow atomic_ref creation in const methods
+  alignas(k_cache_line) mutable uint64_t m_tail_split;
 
   alignas(k_cache_line) std::atomic<bool> m_allstolen;
   alignas(k_cache_line) std::atomic<bool> m_splitreq;
@@ -178,7 +194,7 @@ constexpr auto lace_deque<T>::size() const noexcept -> std::size_t {
 template <dequeable T>
 constexpr auto lace_deque<T>::ssize() const noexcept -> std::ptrdiff_t {
   std::ptrdiff_t const bottom = m_worker.bottom;
-  split_state s = unpack(m_tail_split.load(relaxed));
+  split_state s = unpack(atomic_tail_split().load(relaxed));
   return std::max(bottom - static_cast<std::ptrdiff_t>(s.tail), std::ptrdiff_t{0});
 }
 
@@ -188,7 +204,7 @@ constexpr auto lace_deque<T>::capacity() const noexcept -> std::ptrdiff_t { retu
 template <dequeable T>
 constexpr auto lace_deque<T>::empty() const noexcept -> bool {
   if (m_worker.o_allstolen) return true;
-  split_state s = unpack(m_tail_split.load(seq_cst));
+  split_state s = unpack(atomic_tail_split().load(seq_cst));
   return static_cast<std::ptrdiff_t>(s.tail) >= m_worker.bottom;
 }
 
@@ -198,7 +214,7 @@ constexpr void lace_deque<T>::push(T const& val) noexcept {
     const uint32_t bot = static_cast<uint32_t>(m_worker.bottom);
     (m_array + mask_index(bot))->store(val, relaxed);
 
-    m_tail_split.store(pack(bot, bot + 1), relaxed);
+    atomic_tail_split().store(pack(bot, bot + 1), relaxed);
 
     m_worker.osplit = m_worker.bottom + 1;
     ++m_worker.bottom;
@@ -240,7 +256,8 @@ template <dequeable T>
     return {.code = err::empty, .val = {}};
   }
 
-  uint64_t old_v = m_tail_split.load(acquire);
+  auto tail_split_ref = atomic_tail_split();
+  uint64_t old_v = tail_split_ref.load(acquire);
   split_state s = unpack(old_v);
 
   if (static_cast<int32_t>(s.split - s.tail) > 0) {
@@ -249,7 +266,7 @@ template <dequeable T>
 
     uint64_t new_v = pack(s.tail + 1, s.split);
 
-    if (m_tail_split.compare_exchange_strong(old_v, new_v, release, relaxed)) {
+    if (tail_split_ref.compare_exchange_strong(old_v, new_v, release, relaxed)) {
        return {.code = err::none, .val = tmp};
     }
 
@@ -276,7 +293,7 @@ LF_NOINLINE auto lace_deque<T>::pop_cold_path(F&& when_empty) noexcept -> std::i
   --m_worker.bottom;
 
   // Verify consistency // TODO: needed?
-  split_state s = unpack(m_tail_split.load(relaxed));
+  split_state s = unpack(atomic_tail_split().load(relaxed));
   if (static_cast<int32_t>(s.tail - static_cast<uint32_t>(m_worker.bottom)) > 0) {
     return pop_empty(std::forward<F>(when_empty));
   }
@@ -300,38 +317,33 @@ constexpr auto lace_deque<T>::pop_empty(F&& when_empty) -> std::invoke_result_t<
 
 template <dequeable T>
 constexpr auto lace_deque<T>::shrink_shared() noexcept -> bool {
-  uint64_t old_v = m_tail_split.load(relaxed);
+  // Use the 64-bit view to snapshot state
+  uint64_t old_v = atomic_tail_split().load(relaxed);
   split_state s = unpack(old_v);
 
+  // Optimization: check if empty before doing work
   if (s.tail == s.split) {
     m_allstolen.store(true, release);
     m_worker.o_allstolen = true;
     return true;
   }
 
-  while (true) {
-      s = unpack(old_v);
-      if (s.tail == s.split) {
-          m_allstolen.store(true, release);
-          m_worker.o_allstolen = true;
-          return true;
-      }
+  // Calculate new split based on snapshot
+  uint32_t const new_split_val = s.tail + ((s.split - s.tail) >> 1U);
 
-      uint32_t new_split_val = s.tail + ((s.split - s.tail) >> 1U);
-      uint64_t new_v = pack(s.tail, new_split_val);
+  // BLIND WRITE: Update ONLY the upper 32 bits (split).
+  // We do NOT check if 'tail' has changed. We force the new split value.
+  atomic_split().store(new_split_val, relaxed);
 
-      if (m_tail_split.compare_exchange_weak(old_v, new_v, release, relaxed)) {
-          s.split = new_split_val;
-          break;
-      }
-  }
+  s.split = new_split_val; // Update local variable for calc below
 
   int32_t const diff = static_cast<int32_t>(s.split - static_cast<uint32_t>(m_worker.bottom));
   m_worker.osplit = m_worker.bottom + static_cast<std::ptrdiff_t>(diff);
 
   impl::thread_fence_seq_cst();
 
-  split_state fresh_s = unpack(m_tail_split.load(relaxed));
+  // Re-read 64-bit to check for races
+  split_state fresh_s = unpack(atomic_tail_split().load(relaxed));
 
   if (static_cast<int32_t>(fresh_s.tail - s.split) > 0) {
     if (static_cast<int32_t>(fresh_s.tail - static_cast<uint32_t>(m_worker.bottom)) >= 0) {
@@ -355,22 +367,18 @@ constexpr auto lace_deque<T>::shrink_shared() noexcept -> bool {
 
 template <dequeable T>
 constexpr auto lace_deque<T>::grow_shared() noexcept -> void {
-  uint64_t old_v = m_tail_split.load(relaxed);
+  // Snapshot
+  uint64_t old_v = atomic_tail_split().load(relaxed);
+  split_state s = unpack(old_v);
 
-  while (true) {
-      split_state s = unpack(old_v);
+  // Calculate new split
+  std::ptrdiff_t const new_s_val = (m_worker.osplit + m_worker.bottom + 1) >> 1U;
+  uint32_t new_split_idx = static_cast<uint32_t>(new_s_val);
 
-      std::ptrdiff_t const new_s_val = (m_worker.osplit + m_worker.bottom + 1) >> 1U;
-      uint32_t new_split_idx = static_cast<uint32_t>(new_s_val);
+  // Blind Atomic Write to Upper 32 bits
+  atomic_split().store(new_split_idx, relaxed);
 
-      uint64_t new_v = pack(s.tail, new_split_idx);
-
-      if (m_tail_split.compare_exchange_weak(old_v, new_v, release, relaxed)) {
-          m_worker.osplit = new_s_val;
-          break;
-      }
-  }
-
+  m_worker.osplit = new_s_val;
   m_splitreq.store(false, relaxed);
 }
 
