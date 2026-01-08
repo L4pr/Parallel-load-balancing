@@ -68,13 +68,11 @@ class lace_deque : impl::immovable<lace_deque<T>> {
   explicit lace_deque(const std::size_t cap);
   ~lace_deque() noexcept;
 
-  // --- Basic Accessors ---
   [[nodiscard]] constexpr auto size() const noexcept -> std::size_t;
   [[nodiscard]] constexpr auto ssize() const noexcept -> std::ptrdiff_t;
   [[nodiscard]] constexpr auto capacity() const noexcept -> std::ptrdiff_t;
   [[nodiscard]] constexpr auto empty() const noexcept -> bool;
 
-  // --- Operations ---
   constexpr void push(T const& val) noexcept;
 
   template <std::invocable F = return_nullopt<T>>
@@ -84,7 +82,6 @@ class lace_deque : impl::immovable<lace_deque<T>> {
   [[nodiscard]] constexpr auto steal() noexcept -> steal_t<T>;
 
  private:
-  // Packed state: Tail (public bottom) and Split (boundary)
   struct alignas(8) split_state {
     uint32_t tail;
     uint32_t split;
@@ -105,17 +102,13 @@ class lace_deque : impl::immovable<lace_deque<T>> {
   template <typename F>
   constexpr auto pop_empty(F&& when_empty) -> std::invoke_result_t<F>;
 
-  // Returns true iff empty.
   constexpr auto shrink_shared() noexcept -> bool;
   constexpr auto grow_shared() noexcept -> void;
 
-  // Publish owner's bottom so empty()/size()/ssize() are safe from any thread.
-  // (Needed for libfork schedulers like lazy_pool which query remotely.)
   LF_FORCEINLINE void publish_bottom(std::memory_order mo) noexcept {
     m_bottom.store(static_cast<uint32_t>(m_worker.bottom), mo);
   }
 
-  // Store split while preserving tail (single-word CAS loop on m_tail_split).
   LF_FORCEINLINE void store_split_preserve_tail(uint32_t new_split, std::memory_order succ_mo) noexcept {
     uint64_t cur = m_tail_split.load(relaxed);
     for (;;) {
@@ -131,10 +124,8 @@ class lace_deque : impl::immovable<lace_deque<T>> {
   const std::ptrdiff_t m_mask;
   const std::ptrdiff_t m_capacity;
 
-  // packed {tail, split}
   alignas(k_cache_line) std::atomic<uint64_t> m_tail_split;
 
-  // published bottom (atomic) for cross-thread empty/size checks
   alignas(k_cache_line) std::atomic<uint32_t> m_bottom;
 
   alignas(k_cache_line) std::atomic<bool> m_allstolen;
@@ -165,8 +156,6 @@ lace_deque<T>::lace_deque(const std::size_t cap)
       m_bottom(0u),
       m_allstolen(true),
       m_splitreq(false) {
-  static_assert(std::atomic<uint64_t>::is_always_lock_free,
-                "lace_deque requires lock-free 64-bit atomics for packed (tail,split).");
 
   if (cap > static_cast<std::size_t>(std::numeric_limits<std::ptrdiff_t>::max())) {
     throw std::length_error("Capacity too large");
@@ -212,7 +201,6 @@ constexpr auto lace_deque<T>::size() const noexcept -> std::size_t {
 
 template <dequeable T>
 constexpr auto lace_deque<T>::ssize() const noexcept -> std::ptrdiff_t {
-  // Thread-safe: use published bottom and atomic tail.
   split_state s = unpack(m_tail_split.load(acquire));
   uint32_t const bot = m_bottom.load(acquire);
   if (bot <= s.tail) return 0;
@@ -224,7 +212,6 @@ constexpr auto lace_deque<T>::capacity() const noexcept -> std::ptrdiff_t { retu
 
 template <dequeable T>
 constexpr auto lace_deque<T>::empty() const noexcept -> bool {
-  // Thread-safe: never read m_worker from non-owner threads.
   if (m_allstolen.load(acquire)) return true;
   split_state s = unpack(m_tail_split.load(acquire));
   uint32_t const bot = m_bottom.load(acquire);
@@ -233,7 +220,6 @@ constexpr auto lace_deque<T>::empty() const noexcept -> bool {
 
 template <dequeable T>
 constexpr void lace_deque<T>::push(T const& val) noexcept {
-  // Ensure global observers won't treat us as empty after a push.
   m_allstolen.store(false, release);
 
   if (m_worker.o_allstolen) {
@@ -244,7 +230,6 @@ constexpr void lace_deque<T>::push(T const& val) noexcept {
     ++m_worker.bottom;
     publish_bottom(release);
 
-    // Publish (tail, split) = (bot, bot): no shared region yet.
     m_tail_split.store(pack(bot, bot), release);
 
     m_worker.osplit = static_cast<std::ptrdiff_t>(bot);
@@ -258,10 +243,16 @@ constexpr void lace_deque<T>::push(T const& val) noexcept {
   {
     split_state s = unpack(m_tail_split.load(acquire));
     uint32_t const bot = static_cast<uint32_t>(m_worker.bottom);
-    if ((bot - s.tail) >= static_cast<uint32_t>(m_capacity)) {
+
+    if ((bot - s.tail) >= static_cast<uint32_t>(m_capacity)) [[unlikely]] {
+      std::fprintf(stderr,
+        "lace_deque overflow: cap=%td bot=%u tail=%u split=%u (bot-tail=%u)\n",
+        m_capacity, bot, s.tail, s.split, (bot - s.tail));
+      std::fflush(stderr);
       std::abort();
     }
   }
+
 
   (m_array + mask_index(m_worker.bottom))->store(val, relaxed);
   ++m_worker.bottom;
@@ -300,11 +291,9 @@ template <dequeable T>
   split_state s = unpack(old_v);
 
   if (static_cast<int32_t>(s.split - s.tail) > 0) {
-    // Claim tail first (like Lace) then load element.
     uint64_t new_v = pack(s.tail + 1u, s.split);
 
     if (m_tail_split.compare_exchange_strong(old_v, new_v, std::memory_order_acq_rel, acquire)) {
-      // Acquire keeps it simple/robust vs owner's publishing.
       T tmp = (m_array + mask_index(s.tail))->load(acquire);
       return {.code = err::none, .val = tmp};
     }
@@ -312,7 +301,6 @@ template <dequeable T>
     return {.code = err::lost, .val = {}};
   }
 
-  // No shared work: ask owner to move split.
   m_splitreq.store(true, release);
   return {.code = err::empty, .val = {}};
 }
@@ -331,7 +319,6 @@ LF_NOINLINE auto lace_deque<T>::pop_cold_path(F&& when_empty) noexcept -> std::i
   --m_worker.bottom;
   publish_bottom(relaxed);
 
-  // If a thief raced past our new bottom, we're empty.
   split_state s = unpack(m_tail_split.load(relaxed));
   if (s.tail > static_cast<uint32_t>(m_worker.bottom)) {
     return pop_empty(std::forward<F>(when_empty));
@@ -369,29 +356,23 @@ constexpr auto lace_deque<T>::shrink_shared() noexcept -> bool {
     return true;
   }
 
-  // newsplit = (tail + split)/2
   uint32_t const tail0 = s.tail;
   uint32_t const split0 = s.split;
   uint32_t newsplit = tail0 + ((split0 - tail0) >> 1U);
 
-  // Store split while preserving tail.
   store_split_preserve_tail(newsplit, relaxed);
 
-  // Lace uses a strong fence here.
   impl::thread_fence_seq_cst();
 
-  // Re-read tail after fence.
   split_state fresh = unpack(m_tail_split.load(relaxed));
   uint32_t tail1 = fresh.tail;
 
-  // If tail reached the old split, it got drained while we shrank.
   if (tail1 == split0) {
     m_allstolen.store(true, release);
     m_worker.o_allstolen = true;
     return true;
   }
 
-  // If tail raced ahead of our computed newsplit, recompute once.
   if (tail1 > newsplit) {
     newsplit = tail1 + ((split0 - tail1) >> 1U);
     store_split_preserve_tail(newsplit, relaxed);
@@ -407,7 +388,6 @@ template <dequeable T>
 constexpr auto lace_deque<T>::grow_shared() noexcept -> void {
   m_splitreq.store(false, relaxed);
 
-  // Share half of the private region between osplit..bottom
   uint32_t const split = static_cast<uint32_t>(m_worker.osplit);
   uint32_t const bot   = static_cast<uint32_t>(m_worker.bottom);
 
@@ -418,7 +398,6 @@ constexpr auto lace_deque<T>::grow_shared() noexcept -> void {
   uint32_t const diff = (bot - split + 1u) >> 1U;
   uint32_t const new_split = split + diff;
 
-  // Publish new split while preserving tail.
   store_split_preserve_tail(new_split, release);
 
   m_worker.osplit = static_cast<std::ptrdiff_t>(new_split);
