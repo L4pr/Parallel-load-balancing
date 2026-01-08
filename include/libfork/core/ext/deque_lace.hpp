@@ -281,7 +281,7 @@ template <dequeable T>
     uint64_t new_v = pack(s.top + 1u, s.split);
 
     if (m_top_split.compare_exchange_strong(old_v, new_v, std::memory_order_acq_rel, acquire)) {
-      T tmp = (m_array + mask_index(s.top))->load(relaxed);
+      T tmp = (m_array + mask_index(s.top))->load(acquire);
       return {.code = err::none, .val = tmp};
     }
 
