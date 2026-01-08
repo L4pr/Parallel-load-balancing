@@ -173,12 +173,6 @@ lace_deque<T>::lace_deque(const std::size_t cap)
 
   m_array = static_cast<std::atomic<T>*>(raw);
 
-  // Touch pages (helps avoid major faults on first use)
-  // volatile char* touch_ptr = static_cast<char*>(raw);
-  // for (std::size_t i = 0; i < bytes; i += 4096) {
-  //   touch_ptr[i] = 0;
-  // }
-
   m_worker.bottom = 0;
   m_worker.osplit = 0;
   m_worker.o_allstolen = true;
@@ -287,7 +281,7 @@ template <dequeable T>
     uint64_t new_v = pack(s.top + 1u, s.split);
 
     if (m_top_split.compare_exchange_strong(old_v, new_v, std::memory_order_acq_rel, acquire)) {
-      T tmp = (m_array + mask_index(s.top))->load(acquire);
+      T tmp = (m_array + mask_index(s.top))->load(relaxed);
       return {.code = err::none, .val = tmp};
     }
 
