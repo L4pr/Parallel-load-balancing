@@ -221,8 +221,6 @@ class blocking_deque : impl::immovable<blocking_deque<T>> {
   constexpr ~blocking_deque() noexcept;
 
  private:
-  // --- Private Helpers for CAS Lock ---
-
   // Blocking spinlock acquire (used by Owner)
   void lock() noexcept {
     int expected = 0;
