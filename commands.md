@@ -1,6 +1,6 @@
 ``cd ../../mnt/c/Users/renzo/Desktop/Universiteit/Research_skills/``
 
-``./build/bench/bench/bench_lace   --benchmark_time_unit=ms   --benchmark_filter="fib_libfork<lazy_pool, numa_strategy::fan>/120"   --benchmark_out_format=json --benchmark_out=data/pc/fib.json   --benchmark_repetitions=5``
+``./build/bench/bench/bench_lace   --benchmark_time_unit=ms   --benchmark_filter="fib_libfork<lazy_pool, numa_strategy::fan>/8"   --benchmark_out_format=json --benchmark_out=data/pc/fib.json   --benchmark_repetitions=5``
 
 ``./build/bench/bench/bench_lace   --benchmark_time_unit=ms   --benchmark_filter="fib_libfork"   --benchmark_out_format=json --benchmark_out=data/pc/fib.json   --benchmark_repetitions=1 && \
 ./build/bench/bench/bench_lace   --benchmark_time_unit=ms   --benchmark_filter="uts_libfork.*T1L"   --benchmark_out_format=json --benchmark_out=data/pc/fib.json   --benchmark_repetitions=1``
