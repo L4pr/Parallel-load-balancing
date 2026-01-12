@@ -87,36 +87,19 @@ class lace_deque : impl::immovable<lace_deque<T>> {
     uint32_t split;
   };
 
-  static constexpr uint64_t pack(uint32_t top, uint32_t split) noexcept {
-    return (uint64_t(top) << 32) | uint64_t(split);
+
+  static_assert(std::endian::native == std::endian::little,
+              "Lace fetch_add optimization requires Little Endian layout");
+
+  static constexpr uint64_t k_split_shift = 32ULL;
+
+  // Safe type-punning via C++20 bit_cast
+  static constexpr auto pack(uint32_t t, uint32_t s) noexcept -> uint64_t {
+    return std::bit_cast<uint64_t>(split_state{t, s});
   }
 
-  static constexpr split_state unpack(uint64_t v) noexcept {
-    return split_state{ uint32_t(v >> 32), uint32_t(v) };
-  }
-
-  static constexpr bool is_little_endian =
-#if defined(__cpp_lib_endian)
-      (std::endian::native == std::endian::little);
-#else
-#if defined(__BYTE_ORDER__) && defined(__ORDER_LITTLE_ENDIAN__)
-      (__BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__);
-#else
-      true;
-#endif
-#endif
-
-  LF_FORCEINLINE auto top_split64() const noexcept -> std::atomic_ref<std::uint64_t> {
-    return std::atomic_ref<std::uint64_t>(m_top_split_raw);
-  }
-
-  LF_FORCEINLINE auto split32() const noexcept -> std::atomic_ref<std::uint32_t> {
-    auto* p32 = reinterpret_cast<std::uint32_t*>(&m_top_split_raw);
-    return std::atomic_ref<std::uint32_t>(p32[is_little_endian ? 0 : 1]);
-  }
-
-  LF_FORCEINLINE auto array_at(std::ptrdiff_t idx) noexcept -> std::atomic_ref<T> {
-    return std::atomic_ref<T>(m_array[mask_index(idx)]);
+  static constexpr auto unpack(uint64_t v) noexcept -> split_state {
+    return std::bit_cast<split_state>(v);
   }
 
   template <typename F>
@@ -133,16 +116,21 @@ class lace_deque : impl::immovable<lace_deque<T>> {
   }
 
   LF_FORCEINLINE void store_split_preserve_top(uint32_t new_split, std::memory_order succ_mo) noexcept {
-    split32().store(new_split, succ_mo);
+    uint64_t cur = m_top_split.load(relaxed);
+    for (;;) {
+      split_state s = unpack(cur);
+      uint64_t desired = pack(s.top, new_split);
+      if (m_top_split.compare_exchange_weak(cur, desired, succ_mo, relaxed)) return;
+    }
   }
 
   [[nodiscard]] LF_FORCEINLINE auto mask_index(std::ptrdiff_t idx) const noexcept -> std::size_t;
 
-  T* m_array;
+  std::atomic<T>* m_array;
   const std::ptrdiff_t m_mask;
   const std::ptrdiff_t m_capacity;
 
-  alignas(k_cache_line) mutable std::uint64_t m_top_split_raw;
+  alignas(k_cache_line) std::atomic<uint64_t> m_top_split;
 
   alignas(k_cache_line) std::atomic<uint32_t> m_bottom;
 
@@ -170,7 +158,7 @@ lace_deque<T>::lace_deque(const std::size_t cap)
     : m_array(nullptr),
       m_mask(static_cast<std::ptrdiff_t>(cap) - 1),
       m_capacity(static_cast<std::ptrdiff_t>(cap)),
-      m_top_split_raw(pack(0u, 0u)),
+      m_top_split(pack(0u, 0u)),
       m_bottom(0u),
       m_allstolen(true),
       m_splitreq(false) {
@@ -185,24 +173,24 @@ lace_deque<T>::lace_deque(const std::size_t cap)
     throw std::length_error("Capacity too large for Lace (uint32 indices)");
   }
 
-  const std::size_t bytes = sizeof(T) * cap;
+  const std::size_t bytes = sizeof(std::atomic<T>) * cap;
   void* raw = impl::allocate_virtual(bytes);
   if (!raw) throw std::bad_alloc();
 
-  m_array = static_cast<T*>(raw);
+  m_array = static_cast<std::atomic<T>*>(raw);
 
   m_worker.bottom = 0;
   m_worker.osplit = 0;
   m_worker.o_allstolen = true;
 
-  top_split64().store(pack(0u, 0u), relaxed);
+  m_top_split.store(pack(0u, 0u), relaxed);
   m_bottom.store(0u, relaxed);
 }
 
 template <dequeable T>
 lace_deque<T>::~lace_deque() noexcept {
   if (m_array) {
-    impl::deallocate_virtual(m_array, sizeof(T) * static_cast<std::size_t>(m_capacity));
+    impl::deallocate_virtual(m_array, sizeof(std::atomic<T>) * static_cast<std::size_t>(m_capacity));
   }
 }
 
@@ -213,23 +201,22 @@ constexpr auto lace_deque<T>::size() const noexcept -> std::size_t {
 
 template <dequeable T>
 constexpr auto lace_deque<T>::ssize() const noexcept -> std::ptrdiff_t {
-  split_state s = unpack(top_split64().load(acquire));
+  split_state s = unpack(m_top_split.load(acquire));
   uint32_t const bot = m_bottom.load(acquire);
   if (bot <= s.top) return 0;
   return static_cast<std::ptrdiff_t>(bot - s.top);
 }
 
 template <dequeable T>
+constexpr auto lace_deque<T>::capacity() const noexcept -> std::ptrdiff_t { return m_capacity; }
+
+template <dequeable T>
 constexpr auto lace_deque<T>::empty() const noexcept -> bool {
   if (m_allstolen.load(acquire)) return true;
-  split_state s = unpack(top_split64().load(acquire));
+  split_state s = unpack(m_top_split.load(acquire));
   uint32_t const bot = m_bottom.load(acquire);
   return s.top >= bot;
 }
-
-
-template <dequeable T>
-constexpr auto lace_deque<T>::capacity() const noexcept -> std::ptrdiff_t { return m_capacity; }
 
 template <dequeable T>
 constexpr void lace_deque<T>::push(T const& val) noexcept {
@@ -238,12 +225,12 @@ constexpr void lace_deque<T>::push(T const& val) noexcept {
   if (m_worker.o_allstolen) {
     const uint32_t bot = static_cast<uint32_t>(m_worker.bottom);
 
-    array_at(bot).store(val, relaxed);
+    (m_array + mask_index(bot))->store(val, relaxed);
 
     ++m_worker.bottom;
     publish_bottom(release);
 
-    top_split64().store(pack(bot, bot), release);
+    m_top_split.store(pack(bot, bot), release);
 
     m_worker.osplit = static_cast<std::ptrdiff_t>(bot);
     m_worker.o_allstolen = false;
@@ -259,7 +246,8 @@ constexpr void lace_deque<T>::push(T const& val) noexcept {
   //   LF_ASSERT((bot - s.top) < static_cast<uint32_t>(m_capacity));
   // }
 
-  array_at(m_worker.bottom).store(val, relaxed);
+
+  (m_array + mask_index(m_worker.bottom))->store(val, relaxed);
   ++m_worker.bottom;
   publish_bottom(release);
 
@@ -276,7 +264,7 @@ constexpr auto lace_deque<T>::pop(F&& when_empty) noexcept(std::is_nothrow_invoc
     --m_worker.bottom;
     publish_bottom(relaxed);
 
-    T val = array_at(m_worker.bottom).load(relaxed);
+    T val = (m_array + mask_index(m_worker.bottom))->load(relaxed);
 
     if (m_splitreq.load(relaxed)) [[unlikely]] {
       grow_shared();
@@ -292,14 +280,14 @@ template <dequeable T>
     return {.code = err::empty, .val = {}};
   }
 
-  uint64_t old_v = top_split64().load(acquire);
+  uint64_t old_v = m_top_split.load(acquire);
   split_state s = unpack(old_v);
 
   if (static_cast<int32_t>(s.split - s.top) > 0) {
     uint64_t new_v = pack(s.top + 1u, s.split);
 
-    if (top_split64().compare_exchange_strong(old_v, new_v, std::memory_order_acq_rel, acquire)) {
-      T tmp = array_at(s.top).load(acquire);
+    if (m_top_split.compare_exchange_strong(old_v, new_v, std::memory_order_acq_rel, acquire)) {
+      T tmp = (m_array + mask_index(s.top))->load(acquire);
       return {.code = err::none, .val = tmp};
     }
 
@@ -324,12 +312,12 @@ LF_NOINLINE auto lace_deque<T>::pop_cold_path(F&& when_empty) noexcept -> std::i
   --m_worker.bottom;
   publish_bottom(relaxed);
 
-  split_state s = unpack(top_split64().load(relaxed));
+  split_state s = unpack(m_top_split.load(relaxed));
   if (s.top > static_cast<uint32_t>(m_worker.bottom)) {
     return pop_empty(std::forward<F>(when_empty));
   }
 
-  T val = array_at(m_worker.bottom).load(relaxed);
+  T val = (m_array + mask_index(m_worker.bottom))->load(relaxed);
 
   if (m_splitreq.load(relaxed)) {
     grow_shared();
@@ -352,7 +340,7 @@ constexpr auto lace_deque<T>::pop_empty(F&& when_empty) -> std::invoke_result_t<
 
 template <dequeable T>
 constexpr auto lace_deque<T>::shrink_shared() noexcept -> bool {
-  uint64_t old_v = top_split64().load(relaxed);
+  uint64_t old_v = m_top_split.load(relaxed);
   split_state s = unpack(old_v);
 
   if (s.top == s.split) {
@@ -364,12 +352,13 @@ constexpr auto lace_deque<T>::shrink_shared() noexcept -> bool {
   uint32_t const top0 = s.top;
   uint32_t const split0 = s.split;
   uint32_t newsplit = top0 + ((split0 - top0) >> 1U);
+  uint32_t const decrement = split0 - newsplit;
 
-  store_split_preserve_top(newsplit, relaxed);
+  m_top_split.fetch_sub(static_cast<uint64_t>(decrement) << k_split_shift, relaxed);
 
   impl::thread_fence_seq_cst();
 
-  split_state fresh = unpack(top_split64().load(relaxed));
+  split_state fresh = unpack(m_top_split.load(relaxed));
   uint32_t top1 = fresh.top;
 
   if (top1 == split0) {
@@ -379,8 +368,10 @@ constexpr auto lace_deque<T>::shrink_shared() noexcept -> bool {
   }
 
   if (top1 > newsplit) {
-    newsplit = top1 + ((split0 - top1) >> 1U);
-    store_split_preserve_top(newsplit, relaxed);
+    uint32_t const corrected_split = top1 + ((split0 - top1) >> 1U);
+    uint32_t const correction = corrected_split - newsplit;
+
+    m_top_split.fetch_add(static_cast<uint64_t>(correction) << k_split_shift, relaxed);
   }
 
   m_worker.osplit = static_cast<std::ptrdiff_t>(newsplit);
@@ -403,7 +394,7 @@ constexpr auto lace_deque<T>::grow_shared() noexcept -> void {
   uint32_t const diff = (bot - split + 1u) >> 1U;
   uint32_t const new_split = split + diff;
 
-  store_split_preserve_top(new_split, release);
+  m_top_split.fetch_add(static_cast<uint64_t>(diff) << k_split_shift, release);
 
   m_worker.osplit = static_cast<std::ptrdiff_t>(new_split);
   m_worker.o_allstolen = false;
