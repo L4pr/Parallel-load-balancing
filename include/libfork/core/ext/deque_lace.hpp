@@ -120,7 +120,7 @@ class lace_deque : impl::immovable<lace_deque<T>> {
 
   [[nodiscard]] LF_FORCEINLINE auto mask_index(std::ptrdiff_t idx) const noexcept -> std::size_t;
 
-  std::atomic<T>* m_array;
+  T* m_array;
   const std::ptrdiff_t m_mask;
   const std::ptrdiff_t m_capacity;
 
@@ -167,11 +167,11 @@ lace_deque<T>::lace_deque(const std::size_t cap)
     throw std::length_error("Capacity too large for Lace (uint32 indices)");
   }
 
-  const std::size_t bytes = sizeof(std::atomic<T>) * cap;
+  const std::size_t bytes = sizeof(T) * cap;
   void* raw = impl::allocate_virtual(bytes);
   if (!raw) throw std::bad_alloc();
 
-  m_array = static_cast<std::atomic<T>*>(raw);
+  m_array = static_cast<T*>(raw);
 
   m_worker.bottom = 0;
   m_worker.osplit = 0;
@@ -184,7 +184,7 @@ lace_deque<T>::lace_deque(const std::size_t cap)
 template <dequeable T>
 lace_deque<T>::~lace_deque() noexcept {
   if (m_array) {
-    impl::deallocate_virtual(m_array, sizeof(std::atomic<T>) * static_cast<std::size_t>(m_capacity));
+    impl::deallocate_virtual(m_array, sizeof(T) * static_cast<std::size_t>(m_capacity));
   }
 }
 
@@ -215,7 +215,7 @@ constexpr auto lace_deque<T>::empty() const noexcept -> bool {
 template <dequeable T>
 constexpr void lace_deque<T>::push(T const& val) noexcept {
   auto const bot = static_cast<uint32_t>(m_worker.bottom);
-  (m_array + mask_index(bot))->store(val, release);
+  m_array[mask_index(bot)] = val;
 
   if (m_worker.o_allstolen ) [[unlikely]] {
     m_top_split.store(pack(bot, bot + 1), relaxed);
@@ -240,7 +240,7 @@ constexpr auto lace_deque<T>::pop(F&& when_empty) noexcept(std::is_nothrow_invoc
     --m_worker.bottom;
     publish_bottom(relaxed);
 
-    T val = (m_array + mask_index(m_worker.bottom))->load(relaxed);
+    T val = m_array[m_worker.bottom];
 
     if (m_splitreq.load(relaxed)) [[unlikely]] {
       grow_shared();
@@ -263,14 +263,14 @@ template <dequeable T>
     uint64_t new_v = pack(s.top + 1u, s.split);
 
     if (m_top_split.compare_exchange_strong(old_v, new_v, std::memory_order_acq_rel, acquire)) {
-      T tmp = (m_array + mask_index(s.top))->load(acquire);
+      T tmp = m_array[mask_index(s.top)];
       return {.code = err::none, .val = tmp};
     }
 
     return {.code = err::lost, .val = {}};
   }
 
-  m_splitreq.store(true, release);
+  m_splitreq.store(true, relaxed);
   return {.code = err::empty, .val = {}};
 }
 
@@ -288,7 +288,7 @@ LF_NOINLINE auto lace_deque<T>::pop_cold_path(F&& when_empty) noexcept -> std::i
   --m_worker.bottom;
   publish_bottom(relaxed);
 
-  T val = (m_array + mask_index(m_worker.bottom))->load(relaxed);
+  T val = m_array[mask_index(m_worker.bottom)];
 
   if (m_splitreq.load(relaxed)) {
     grow_shared();
