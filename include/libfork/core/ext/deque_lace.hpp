@@ -253,23 +253,20 @@ template <dequeable T>
   }
 
   uint64_t old_v = m_top_split.load(acquire);
-  split_state s_state = unpack(old_v);
+  split_state s = unpack(old_v);
 
-  if (s_state.top < s_state.split) {
-    uint64_t new_v = pack(s_state.top + 1U, s_state.split);
+  if (static_cast<int32_t>(s.split - s.top) > 0) {
+    uint64_t new_v = pack(s.top + 1u, s.split);
 
     if (m_top_split.compare_exchange_strong(old_v, new_v, std::memory_order_acq_rel, acquire)) {
-      T tmp = (m_array + mask_index(s_state.top))->load(acquire);
+      T tmp = (m_array + mask_index(s.top))->load(acquire);
       return {.code = err::none, .val = tmp};
     }
 
     return {.code = err::lost, .val = {}};
   }
 
-  if (!m_splitreq.load(relaxed)) {
-    m_splitreq.store(true, relaxed);
-  }
-
+  m_splitreq.store(true, release);
   return {.code = err::empty, .val = {}};
 }
 
