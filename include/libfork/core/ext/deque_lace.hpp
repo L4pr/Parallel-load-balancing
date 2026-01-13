@@ -89,6 +89,10 @@ class lace_deque : impl::immovable<lace_deque<T>> {
 
   static_assert(std::endian::native == std::endian::little,
               "Lace fetch_add optimization requires Little Endian layout");
+  static_assert(std::is_trivially_copyable_v<T>,
+              "Plain-slot deque requires T to be trivially copyable (e.g., coroutine_handle, pointer).");
+  static_assert(std::is_trivially_destructible_v<T>,
+                "Plain-slot deque assumes slots don't need destruction (use handles/pointers).");
 
   static constexpr uint64_t k_split_shift = 32ULL;
 
@@ -202,7 +206,7 @@ constexpr auto lace_deque<T>::capacity() const noexcept -> std::ptrdiff_t { retu
 
 template <dequeable T>
 constexpr auto lace_deque<T>::empty() const noexcept -> bool {
-  if (m_allstolen.load(acquire)) { return true; }
+  if (m_allstolen.load(acquire)) return true;
   split_state s = unpack(m_top_split.load(acquire));
   uint32_t const bot = m_bottom.load(acquire);
   return s.top >= bot;
