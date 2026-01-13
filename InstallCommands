@@ -1,0 +1,10 @@
+sudo apt update
+sudo apt upgrade
+sudo apt install git cmake curl zip unzip tar ninja-build build-essential pkg-config libhwloc-dev libbenchmark-dev
+git clone -b Renzo_dev --recursive https://github.com/L4pr/Parallel-load-balancing.git
+./vcpkg/bootstrap-vcpkg.sh
+./vcpkg/vcpkg install
+cmake --preset=benchmark-nix -DCMAKE_TOOLCHAIN_FILE=./vcpkg/scripts/buildsystems/vcpkg.cmake -DVCPKG_MANIFEST_FEATURES="benchmark"
+cmake --build build/bench -j $(nproc)
+chmod +x runAllBenchmarks.sh
+./runAllBenchmarks.sh

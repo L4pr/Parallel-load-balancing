@@ -1,0 +1,371 @@
+#ifndef LIBFORK_CORE_EXT_DEQUE_LACE_HPP
+#define LIBFORK_CORE_EXT_DEQUE_LACE_HPP
+
+// Copyright © Conor Williams <conorwilliams@outlook.com>
+// SPDX-License-Identifier: MPL-2.0
+
+#include <atomic>
+#include <bit>       // for std::bit_cast
+#include <cstddef>
+#include <cstdint>
+#include <cstdlib>   // for std::abort
+#include <functional> // for std::invoke
+#include <limits>
+#include <new>
+#include <stdexcept>
+#include <type_traits>
+#include <utility>
+
+#include "libfork/core/ext/deque_common.hpp"
+#include "libfork/core/impl/atomics.hpp"
+#include "libfork/core/impl/utility.hpp"
+#include "libfork/core/macro.hpp"
+
+// Platform headers for mmap/VirtualAlloc
+#if defined(_WIN32) || defined(_WIN64)
+  #define NOMINMAX
+  #include <windows.h>
+#else
+  #include <sys/mman.h>
+#endif
+
+namespace lf {
+
+// Virtual memory functions
+namespace impl {
+inline auto allocate_virtual(std::size_t bytes) -> void* {
+#if defined(_WIN32) || defined(_WIN64)
+  void* ptr = VirtualAlloc(nullptr, bytes, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+  return ptr;
+#else
+  void* ptr = mmap(nullptr, bytes, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+  return (ptr == MAP_FAILED) ? nullptr : ptr;
+#endif
+}
+
+inline auto deallocate_virtual(void* ptr, std::size_t bytes) -> void {
+#if defined(_WIN32) || defined(_WIN64)
+  (void)bytes;
+  VirtualFree(ptr, 0, MEM_RELEASE);
+#else
+  munmap(ptr, bytes);
+#endif
+}
+} // namespace impl
+
+inline namespace ext {
+
+template <dequeable T>
+class lace_deque : impl::immovable<lace_deque<T>> {
+  static constexpr std::size_t k_cache_line = 128;
+  // Default: 16 Million items. Safe within uint32_t limits.
+  static constexpr std::size_t k_default_cap = 1 << 24;
+
+ public:
+  using value_type = T;
+
+  constexpr lace_deque();
+  explicit lace_deque(const std::size_t cap);
+  ~lace_deque() noexcept;
+
+  [[nodiscard]] constexpr auto size() const noexcept -> std::size_t;
+  [[nodiscard]] constexpr auto ssize() const noexcept -> std::ptrdiff_t;
+  [[nodiscard]] constexpr auto capacity() const noexcept -> std::ptrdiff_t;
+  [[nodiscard]] constexpr auto empty() const noexcept -> bool;
+
+  constexpr void push(T const& val) noexcept;
+
+  template <std::invocable F = return_nullopt<T>>
+    requires std::convertible_to<T, std::invoke_result_t<F>>
+  constexpr auto pop(F&& when_empty = {}) noexcept(std::is_nothrow_invocable_v<F>) -> std::invoke_result_t<F>;
+
+  [[nodiscard]] constexpr auto steal() noexcept -> steal_t<T>;
+
+ private:
+  struct alignas(8) split_state {
+    uint32_t top;
+    uint32_t split;
+  };
+
+  static_assert(std::endian::native == std::endian::little,
+              "Lace fetch_add optimization requires Little Endian layout");
+  static_assert(std::is_trivially_copyable_v<T>,
+              "Plain-slot deque requires T to be trivially copyable (e.g., coroutine_handle, pointer).");
+  static_assert(std::is_trivially_destructible_v<T>,
+                "Plain-slot deque assumes slots don't need destruction (use handles/pointers).");
+
+  static constexpr uint64_t k_split_shift = 32ULL;
+
+  // Safe type-punning via C++20 bit_cast
+  static constexpr auto pack(uint32_t t, uint32_t s) noexcept -> uint64_t {
+    return std::bit_cast<uint64_t>(split_state{t, s});
+  }
+
+  static constexpr auto unpack(uint64_t v) noexcept -> split_state {
+    return std::bit_cast<split_state>(v);
+  }
+
+  template <typename F>
+  auto pop_cold_path(F&& when_empty) noexcept -> std::invoke_result_t<F>;
+
+  template <typename F>
+  constexpr auto pop_empty(F&& when_empty) -> std::invoke_result_t<F>;
+
+  constexpr auto shrink_shared() noexcept -> bool;
+  constexpr auto grow_shared() noexcept -> void;
+
+  LF_FORCEINLINE void publish_bottom(const std::memory_order memory_ordering) noexcept {
+    m_bottom.store(static_cast<uint32_t>(m_worker.bottom), memory_ordering);
+  }
+
+  [[nodiscard]] LF_FORCEINLINE auto mask_index(std::ptrdiff_t idx) const noexcept -> std::size_t;
+
+  T* m_array;
+  const std::ptrdiff_t m_mask;
+  const std::ptrdiff_t m_capacity;
+
+  alignas(k_cache_line) std::atomic<uint64_t> m_top_split;
+
+  alignas(k_cache_line) std::atomic<uint32_t> m_bottom;
+
+  alignas(k_cache_line) std::atomic<bool> m_allstolen;
+  alignas(k_cache_line) std::atomic<bool> m_splitreq;
+
+  struct alignas(k_cache_line) {
+    std::ptrdiff_t bottom{0};
+    std::ptrdiff_t osplit{0};
+    bool o_allstolen{true};
+  } m_worker;
+
+  // Convenience aliases
+  static constexpr std::memory_order relaxed = std::memory_order_relaxed;
+  static constexpr std::memory_order acquire = std::memory_order_acquire;
+  static constexpr std::memory_order release = std::memory_order_release;
+  static constexpr std::memory_order seq_cst = std::memory_order_seq_cst;
+};
+
+template <dequeable T>
+constexpr lace_deque<T>::lace_deque() : lace_deque(k_default_cap) {}
+
+template <dequeable T>
+lace_deque<T>::lace_deque(const std::size_t cap)
+    : m_array(nullptr),
+      m_mask(static_cast<std::ptrdiff_t>(cap) - 1),
+      m_capacity(static_cast<std::ptrdiff_t>(cap)),
+      m_top_split(pack(0u, 0u)),
+      m_bottom(0u),
+      m_allstolen(true),
+      m_splitreq(false) {
+
+  if (cap > static_cast<std::size_t>(std::numeric_limits<std::ptrdiff_t>::max())) {
+    throw std::length_error("Capacity too large");
+  }
+  if ((cap & (cap - 1)) != 0) {
+    std::abort();
+  }
+  if (cap > static_cast<std::size_t>(std::numeric_limits<uint32_t>::max())) {
+    throw std::length_error("Capacity too large for Lace (uint32 indices)");
+  }
+
+  const std::size_t bytes = sizeof(T) * cap;
+  void* raw = impl::allocate_virtual(bytes);
+  if (!raw) throw std::bad_alloc();
+
+  m_array = static_cast<T*>(raw);
+
+  m_worker.bottom = 0;
+  m_worker.osplit = 0;
+  m_worker.o_allstolen = true;
+
+  m_top_split.store(pack(0u, 0u), relaxed);
+  m_bottom.store(0u, relaxed);
+}
+
+template <dequeable T>
+lace_deque<T>::~lace_deque() noexcept {
+  if (m_array) {
+    impl::deallocate_virtual(m_array, sizeof(T) * static_cast<std::size_t>(m_capacity));
+  }
+}
+
+template <dequeable T>
+constexpr auto lace_deque<T>::size() const noexcept -> std::size_t {
+  return static_cast<std::size_t>(ssize());
+}
+
+template <dequeable T>
+constexpr auto lace_deque<T>::ssize() const noexcept -> std::ptrdiff_t {
+  split_state s = unpack(m_top_split.load(acquire));
+  uint32_t const bot = m_bottom.load(acquire);
+  if (bot <= s.top) return 0;
+  return static_cast<std::ptrdiff_t>(bot - s.top);
+}
+
+template <dequeable T>
+constexpr auto lace_deque<T>::capacity() const noexcept -> std::ptrdiff_t { return m_capacity; }
+
+template <dequeable T>
+constexpr auto lace_deque<T>::empty() const noexcept -> bool {
+  if (m_allstolen.load(acquire)) return true;
+  split_state s = unpack(m_top_split.load(acquire));
+  uint32_t const bot = m_bottom.load(acquire);
+  return s.top >= bot;
+}
+
+template <dequeable T>
+constexpr void lace_deque<T>::push(T const& val) noexcept {
+  auto const bot = static_cast<uint32_t>(m_worker.bottom);
+  m_array[mask_index(bot)] = val;
+
+  if (m_worker.o_allstolen ) [[unlikely]] {
+    m_top_split.store(pack(bot, bot + 1), relaxed);
+    m_allstolen.store(false, release);
+    if (m_splitreq.load(relaxed)) { m_splitreq.store(false, relaxed); }
+
+    m_worker.osplit = static_cast<std::ptrdiff_t>(bot + 1);
+    m_worker.o_allstolen = false;
+  } else if (m_splitreq.load(relaxed)) {
+    grow_shared();
+  }
+
+  ++m_worker.bottom;
+  publish_bottom(release);
+}
+
+template <dequeable T>
+template <std::invocable F>
+  requires std::convertible_to<T, std::invoke_result_t<F>>
+constexpr auto lace_deque<T>::pop(F&& when_empty) noexcept(std::is_nothrow_invocable_v<F>) -> std::invoke_result_t<F> {
+  if (m_worker.bottom > m_worker.osplit) [[likely]] {
+    --m_worker.bottom;
+    publish_bottom(relaxed);
+
+    T val = m_array[m_worker.bottom];
+
+    if (m_splitreq.load(relaxed)) [[unlikely]] {
+      grow_shared();
+    }
+    return val;
+  }
+  return pop_cold_path(std::forward<F>(when_empty));
+}
+
+template <dequeable T>
+[[nodiscard]] constexpr auto lace_deque<T>::steal() noexcept -> steal_t<T> {
+  if (m_allstolen.load(acquire)) {
+    return {.code = err::empty, .val = {}};
+  }
+
+  uint64_t old_v = m_top_split.load(acquire);
+  split_state s = unpack(old_v);
+
+  if (static_cast<int32_t>(s.split - s.top) > 0) {
+    uint64_t new_v = pack(s.top + 1u, s.split);
+
+    if (m_top_split.compare_exchange_strong(old_v, new_v, std::memory_order_acq_rel, acquire)) {
+      T tmp = m_array[mask_index(s.top)];
+      return {.code = err::none, .val = tmp};
+    }
+
+    return {.code = err::lost, .val = {}};
+  }
+
+  m_splitreq.store(true, relaxed);
+  return {.code = err::empty, .val = {}};
+}
+
+template <dequeable T>
+template <typename F>
+LF_NOINLINE auto lace_deque<T>::pop_cold_path(F&& when_empty) noexcept -> std::invoke_result_t<F> {
+  if (m_worker.o_allstolen) {
+    return std::invoke(std::forward<F>(when_empty));
+  }
+
+  if (shrink_shared()) {
+    return pop_empty(std::forward<F>(when_empty));
+  }
+
+  --m_worker.bottom;
+  publish_bottom(relaxed);
+
+  T val = m_array[mask_index(m_worker.bottom)];
+
+  if (m_splitreq.load(relaxed)) {
+    grow_shared();
+  }
+  return val;
+}
+
+template <dequeable T>
+template <typename F>
+constexpr auto lace_deque<T>::pop_empty(F&& when_empty) -> std::invoke_result_t<F> {
+  if (!m_worker.o_allstolen) {
+    m_allstolen.store(true, release);
+    m_worker.o_allstolen = true;
+  }
+
+  return std::invoke(std::forward<F>(when_empty));
+}
+
+template <dequeable T>
+constexpr auto lace_deque<T>::shrink_shared() noexcept -> bool {
+  const uint64_t old_v = m_top_split.load(relaxed);
+  split_state s_state = unpack(old_v);
+
+  uint32_t const top = s_state.top;
+  uint32_t const split = s_state.split;
+
+  if (top != split) {
+    uint32_t new_split = top + ((split - top) >> 1U);
+    uint32_t const decrement = split - new_split;
+    m_top_split.fetch_sub(static_cast<uint64_t>(decrement) << k_split_shift, relaxed);
+
+    impl::thread_fence_seq_cst();
+
+    uint32_t fresh_t = unpack(m_top_split.load(relaxed)).top;
+    if (fresh_t != split) {
+      if (fresh_t > new_split) [[unlikely]] {
+        auto const corrected_split = static_cast<uint32_t>((static_cast<uint64_t>(fresh_t) + static_cast<uint64_t>(split)) >> 1U);
+        uint32_t const correction = corrected_split - new_split;
+        new_split = corrected_split;
+        m_top_split.fetch_add(static_cast<uint64_t>(correction) << k_split_shift, relaxed);
+      }
+      m_worker.osplit = static_cast<std::ptrdiff_t>(new_split);
+      return false;
+    }
+  }
+
+  m_allstolen.store(true, release);
+  m_worker.o_allstolen = true;
+  return true;
+}
+
+template <dequeable T>
+constexpr auto lace_deque<T>::grow_shared() noexcept -> void {
+  auto const split = static_cast<uint32_t>(m_worker.osplit);
+  auto const bot   = static_cast<uint32_t>(m_worker.bottom);
+
+  if (bot <= split) {
+    return;
+  }
+
+  uint32_t const diff = (bot - split + 1U) >> 1U;
+  uint32_t const new_split = split + diff;
+
+  m_top_split.fetch_add(static_cast<uint64_t>(diff) << k_split_shift, release);
+  m_worker.osplit = static_cast<std::ptrdiff_t>(new_split);
+
+  m_worker.o_allstolen = false;
+  m_allstolen.store(false, release);
+  m_splitreq.store(false, relaxed);
+}
+
+template <dequeable T>
+[[nodiscard]] LF_FORCEINLINE auto lace_deque<T>::mask_index(std::ptrdiff_t idx) const noexcept -> std::size_t {
+  return static_cast<std::size_t>(idx) & static_cast<std::size_t>(m_mask);
+}
+
+} // namespace ext
+} // namespace lf
+
+#endif /* LIBFORK_CORE_EXT_DEQUE_LACE_HPP */

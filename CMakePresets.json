@@ -191,14 +191,21 @@
       "generator": "Ninja",
       "inherits": [
         "dev-mode",
+        "ci-vcpkg",
         "ci-std"
       ],
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Release",
         "BUILD_TESTING": "OFF",
         "BUILD_BENCHMARKS": "ON",
-        "CMAKE_CXX_FLAGS": "-flto=auto -march=native"
+        "CMAKE_CXX_FLAGS": "-flto=auto -march=native -w -DLF_NO_CHECK"
       }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "benchmark-nix",
+      "configurePreset": "benchmark-nix"
     }
   ]
 }

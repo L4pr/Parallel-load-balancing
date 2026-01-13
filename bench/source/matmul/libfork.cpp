@@ -5,6 +5,16 @@
 #include "../util.hpp"
 #include "config.hpp"
 
+#if defined(LF_BENCH_CHASE_LEV)
+#define ALGO_NAME "ChaseLev"
+#elif defined(LF_BENCH_BLOCKING)
+#define ALGO_NAME "Blocking"
+#elif defined(LF_BENCH_LACE)
+#define ALGO_NAME "Lace"
+#else
+#define ALGO_NAME "ChaseLev"
+#endif
+
 namespace {
 
 using namespace lf;
@@ -16,8 +26,8 @@ using mat = float *;
  *
  * a00 a01            =  a00 * b00 + a01 * b10,   a00 * b01 + a01 * b11
  * a10 a11            =  a10 * b00 + a11 * b10,   a10 * b01 + a11 * b11
- *           b00 b01
- *           b10 b11
+ *         b00 b01
+ *         b10 b11
  */
 inline constexpr auto matmul = [](auto matmul, mat A, mat B, mat R, unsigned n, unsigned s, auto add)
                                    LF_STATIC_CALL -> task<> {
@@ -53,6 +63,7 @@ inline constexpr auto matmul = [](auto matmul, mat A, mat B, mat R, unsigned n, 
 
 template <lf::scheduler Sch, lf::numa_strategy Strategy>
 void matmul_libfork(benchmark::State &state) {
+  state.SetLabel(ALGO_NAME);
 
   state.counters["green_threads"] = state.range(0);
   state.counters["mat NxN"] = matmul_work;

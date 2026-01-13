@@ -133,7 +133,9 @@ class full_context : public worker_context {
   /**
    * @brief Add a task to the work queue.
    */
-  void push(task_handle task) { m_tasks.push(non_null(task)); }
+  void push(task_handle task) {
+    m_tasks.push(non_null(task));
+  }
 
   /**
    * @brief Remove a task from the work queue

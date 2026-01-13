@@ -12,6 +12,16 @@
 #include "config.hpp"
 #include "external/uts.h"
 
+#if defined(LF_BENCH_CHASE_LEV)
+  #define ALGO_NAME "ChaseLev"
+#elif defined(LF_BENCH_BLOCKING)
+  #define ALGO_NAME "Blocking"
+#elif defined(LF_BENCH_LACE)
+  #define ALGO_NAME "Lace"
+#else
+  #define ALGO_NAME "ChaseLev"
+#endif
+
 namespace {
 
 constexpr auto uts_alloc = [](auto uts, int depth, Node *parent) LF_STATIC_CALL -> lf::task<result> {
@@ -103,7 +113,7 @@ inline constexpr auto uts = [](auto uts, int depth, Node *parent) LF_STATIC_CALL
 
 template <lf::scheduler Sch, lf::numa_strategy Strategy>
 void uts_libfork_alloc(benchmark::State &state, int tree) {
-
+  state.SetLabel(ALGO_NAME);
   state.counters["green_threads"] = state.range(0);
 
   Sch sch(state.range(0));
@@ -127,7 +137,7 @@ void uts_libfork_alloc(benchmark::State &state, int tree) {
 
 template <lf::scheduler Sch, lf::numa_strategy Strategy>
 void uts_libfork(benchmark::State &state, int tree) {
-
+  state.SetLabel(ALGO_NAME);
   state.counters["green_threads"] = state.range(0);
 
   Sch sch(state.range(0));

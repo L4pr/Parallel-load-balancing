@@ -11,6 +11,16 @@
 #include "../util.hpp"
 #include "config.hpp"
 
+#if defined(LF_BENCH_CHASE_LEV)
+#define ALGO_NAME "ChaseLev"
+#elif defined(LF_BENCH_BLOCKING)
+#define ALGO_NAME "Blocking"
+#elif defined(LF_BENCH_LACE)
+#define ALGO_NAME "Lace"
+#else
+#define ALGO_NAME "ChaseLev"
+#endif
+
 namespace {
 
 using namespace lf;
@@ -76,6 +86,7 @@ void nqueens_libfork(benchmark::State &state) {
 using namespace lf;
 
 BENCHMARK(nqueens_libfork<lazy_pool, numa_strategy::seq>)->Apply(targs)->UseRealTime();
-BENCHMARK(nqueens_libfork<busy_pool, numa_strategy::seq>)->Apply(targs)->UseRealTime();
 BENCHMARK(nqueens_libfork<lazy_pool, numa_strategy::fan>)->Apply(targs)->UseRealTime();
+
+BENCHMARK(nqueens_libfork<busy_pool, numa_strategy::seq>)->Apply(targs)->UseRealTime();
 BENCHMARK(nqueens_libfork<busy_pool, numa_strategy::fan>)->Apply(targs)->UseRealTime();

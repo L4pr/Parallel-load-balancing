@@ -171,8 +171,8 @@ for k, v in benchmarks:
     ymin = min(ymin, min(t))
 
 
-ax.set_xticks(range(0, int(32 + 1.5), 4))
-bx.set_xticks(range(0, int(32 + 1.5), 4))
+ax.set_xticks(range(0, int(xmax + 1.5), 4))
+bx.set_xticks(range(0, int(xmax + 1.5), 4))
 
 # ax.set_title(f"\\textit{{{p}}}")
 
@@ -182,8 +182,8 @@ ax.set_yscale("log", base=10)
 
 # ax_abs.yaxis.set_label_position("right")
 
-ax.set_ylim(bottom=10, top=1000)
-bx.set_ylim(bottom=3e6, top=2e9)
+# ax.set_ylim(bottom=10, top=1000)
+# bx.set_ylim(bottom=3e6, top=2e9)
 
 
 count += 1

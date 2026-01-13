@@ -1,0 +1,107 @@
+{
+  "version": 3,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 14,
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "base-debug",
+      "hidden": true,
+      "inherits": ["dev-mode", "ci-linux"],
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "RelWithDebInfo"
+      }
+    },
+    {
+      "name": "dev",
+      "inherits": "base-debug",
+      "binaryDir": "${sourceDir}/build/dev"
+    },
+    {
+      "name": "dev-chase-lev",
+      "inherits": "base-debug",
+      "binaryDir": "${sourceDir}/build/chase-lev",
+      "cacheVariables": {
+        "CMAKE_CXX_FLAGS": "-DLF_BENCH_CHASE_LEV -w"
+      }
+    },
+    {
+      "name": "dev-blocking",
+      "inherits": "base-debug",
+      "binaryDir": "${sourceDir}/build/blocking",
+      "cacheVariables": {
+        "CMAKE_CXX_FLAGS": "-DLF_BENCH_BLOCKING -w"
+      }
+    },
+    {
+      "name": "dev-lace",
+      "inherits": "base-debug",
+      "binaryDir": "${sourceDir}/build/lace",
+      "cacheVariables": {
+        "CMAKE_CXX_FLAGS": "-DLF_BENCH_LACE -w"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "dev",
+      "configurePreset": "dev",
+      "configuration": "Debug",
+      "jobs": 12
+    },
+    {
+      "name": "dev-chase-lev",
+      "configurePreset": "dev-chase-lev",
+      "configuration": "Debug",
+      "jobs": 12
+    },
+    {
+      "name": "dev-blocking",
+      "configurePreset": "dev-blocking",
+      "configuration": "Debug",
+      "jobs": 12
+    },
+    {
+      "name": "dev-lace",
+      "configurePreset": "dev-lace",
+      "configuration": "Debug",
+      "jobs": 12
+    }
+  ],
+  "testPresets": [
+    {
+      "name": "dev",
+      "configurePreset": "dev",
+      "configuration": "Debug",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "dev-chase-lev",
+      "configurePreset": "dev-chase-lev",
+      "configuration": "Debug",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "dev-blocking",
+      "configurePreset": "dev-blocking",
+      "configuration": "Debug",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "dev-lace",
+      "configurePreset": "dev-lace",
+      "configuration": "Debug",
+      "output": {
+        "outputOnFailure": true
+      }
+    }
+  ]
+}
