@@ -210,40 +210,22 @@ constexpr auto lace_deque<T>::empty() const noexcept -> bool {
 
 template <dequeable T>
 constexpr void lace_deque<T>::push(T const& val) noexcept {
-  m_allstolen.store(false, release);
+  auto const bot = static_cast<uint32_t>(m_worker.bottom);
+  (m_array + mask_index(bot))->store(val, release);
 
-  if (m_worker.o_allstolen) {
-    const uint32_t bot = static_cast<uint32_t>(m_worker.bottom);
+  if (m_worker.o_allstolen ) [[unlikely]] {
+    m_top_split.store(pack(bot, bot + 1), relaxed);
+    m_allstolen.store(false, release);
+    if (m_splitreq.load(relaxed)) { m_splitreq.store(false, relaxed); }
 
-    (m_array + mask_index(bot))->store(val, relaxed);
-
-    ++m_worker.bottom;
-    publish_bottom(release);
-
-    m_top_split.store(pack(bot, bot), release);
-
-    m_worker.osplit = static_cast<std::ptrdiff_t>(bot);
+    m_worker.osplit = static_cast<std::ptrdiff_t>(bot + 1);
     m_worker.o_allstolen = false;
-
-    m_splitreq.store(false, relaxed);
-    return;
-  }
-
-  // // Check for capacity
-  // {
-  //   split_state s = unpack(m_top_split.load(acquire));
-  //   uint32_t const bot = static_cast<uint32_t>(m_worker.bottom);
-  //   LF_ASSERT((bot - s.top) < static_cast<uint32_t>(m_capacity));
-  // }
-
-
-  (m_array + mask_index(m_worker.bottom))->store(val, relaxed);
-  ++m_worker.bottom;
-  publish_bottom(release);
-
-  if (m_splitreq.load(relaxed)) [[unlikely]] {
+  } else if (m_splitreq.load(relaxed)) {
     grow_shared();
   }
+
+  ++m_worker.bottom;
+  publish_bottom(release);
 }
 
 template <dequeable T>
@@ -291,8 +273,8 @@ template <dequeable T>
 template <dequeable T>
 template <typename F>
 LF_NOINLINE auto lace_deque<T>::pop_cold_path(F&& when_empty) noexcept -> std::invoke_result_t<F> {
-  if (m_worker.o_allstolen || m_worker.bottom <= 0) {
-    return pop_empty(std::forward<F>(when_empty));
+  if (m_worker.o_allstolen) {
+    return std::invoke(std::forward<F>(when_empty));
   }
 
   if (shrink_shared()) {
@@ -313,12 +295,10 @@ LF_NOINLINE auto lace_deque<T>::pop_cold_path(F&& when_empty) noexcept -> std::i
 template <dequeable T>
 template <typename F>
 constexpr auto lace_deque<T>::pop_empty(F&& when_empty) -> std::invoke_result_t<F> {
-  m_worker.osplit = m_worker.bottom;
-  m_worker.o_allstolen = true;
-
-  publish_bottom(release);
-  m_allstolen.store(true, release);
-  m_splitreq.store(false, relaxed);
+  if (!m_worker.o_allstolen) {
+    m_allstolen.store(true, release);
+    m_worker.o_allstolen = true;
+  }
 
   return std::invoke(std::forward<F>(when_empty));
 }
