@@ -19,7 +19,7 @@ include(FetchContent)
 FetchContent_Declare(lace GIT_REPOSITORY https://github.com/trolando/lace.git GIT_TAG v2.0.3)
 set(LACE_BUILD_TESTS OFF CACHE INTERNAL "")
 set(LACE_BUILD_BENCHMARKS OFF CACHE INTERNAL "")
-set(LACE_USE_HWLOC OFF CACHE INTERNAL "") # for turning on and off hwloc support on lace
+set(LACE_USE_HWLOC ON CACHE INTERNAL "") # for turning on and off hwloc support on lace
 FetchContent_MakeAvailable(lace)
 
 # TMC
