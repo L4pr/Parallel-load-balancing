@@ -9,8 +9,13 @@ from statistics import median, stdev
 plt.rcParams["text.usetex"] = True
 
 # ---------------------------------------------------------
-# Configuration: Map your new file suffixes to labels
+# Configuration
 # ---------------------------------------------------------
+
+# TOGGLE: Set to True to compare each variant against its own T=1 run.
+#         Set to False to compare all variants against the 'serial' file.
+USE_SELF_BASELINE = False
+
 VARIANTS = {
     "chase":         {"label": "Chase-Lev",       "mark": "o"},
     "blocking":      {"label": "Blocking",        "mark": "s"},
@@ -18,33 +23,19 @@ VARIANTS = {
     "lace_original": {"label": "Lace (Original)", "mark": "v"}
 }
 
-# The benchmark prefixes
-PATTERNS = ["fib",
-            "uts",
-            "nqueens",
-            "matmul"
-            ]
-
-# Directory where your bash script saved the JSONs
-DATA_DIR = "../data/pc"
+PATTERNS = ["fib", "uts", "nqueens", "matmul"]
+DATA_DIR = "../data/server"
 
 # ---------------------------------------------------------
-# Helper Functions (Preserving original logic)
+# Helper Functions
 # ---------------------------------------------------------
 def stat(x):
-    # Original logic: sort and keep all points
     x = sorted(x)[:]
     err = stdev(x) / (np.sqrt(len(x)) if len(x) > 1 else 1)
     return median(x), err, min(x)
 
 def load_data():
-    """
-    Reads all JSON files and organizes them.
-    Includes 'serial' in the search to act as the baseline.
-    """
     bench_data = {p: {} for p in PATTERNS}
-
-    # We add "serial" to the suffixes to check for baseline files
     all_suffixes = list(VARIANTS.keys()) + ["serial"]
 
     for bench_name in PATTERNS:
@@ -65,7 +56,6 @@ def load_data():
             for run in data.get("benchmarks", []):
                 if run.get("run_type") != "iteration":
                     continue
-
                 th = int(float(run.get("green_threads", run.get("threads", 1))) + 0.5)
                 if th not in variant_data:
                     variant_data[th] = []
@@ -85,49 +75,48 @@ args = parser.parse_args()
 
 all_data = load_data()
 
-# Create 2x2 grid
-fig, axs = plt.subplots(2, 2, figsize=(8, 8), sharex=True, sharey=False)
+# sharex=False ensures Core numbers appear on all graphs
+fig, axs = plt.subplots(2, 2, figsize=(8, 8), sharex=False, sharey=False)
 axs_flat = axs.flatten()
 
 count = 0
 for ax_abs, p in zip(axs_flat, PATTERNS):
     print(f"Plotting {p}...")
 
-    # --- 1. SEARCH FOR SERIAL BASELINE (Original Logic) ---
-    tS = -1
-    tSerr = -1
+    # --- 1. PRE-CALCULATE SERIAL BASELINE (Only if NOT using self-baseline) ---
+    global_tS = -1
+    global_tSerr = -1
 
-    # Look for the 'serial' entry for this benchmark
-    if "serial" in all_data[p]:
-        # Original: tS, tSerr, _ = stat(v[0][1])
-        # v[0] is the first thread entry (T=1), v[0][1] is the list of times
-        tS, tSerr, _ = stat(all_data[p]["serial"][0][1])
-    else:
-        print(f"  No serial file found for {p}, falling back to fastest T=1...")
-        # Fallback to find fastest T=1 if serial file is missing
-        t1_times = []
-        for suffix in VARIANTS.keys():
-            if suffix in all_data[p] and all_data[p][suffix][0][0] == 1:
-                t1_times.append(stat(all_data[p][suffix][0][1]))
-        if t1_times:
-            best_stat = min(t1_times, key=lambda x: x[0])
-            tS, tSerr = best_stat[0], best_stat[1]
+    if not USE_SELF_BASELINE:
+        if "serial" in all_data[p]:
+            # Use the dedicated serial file
+            global_tS, global_tSerr, _ = stat(all_data[p]["serial"][0][1])
+        else:
+            print(f"  No serial file found for {p}, falling back to fastest T=1...")
+            # Fallback: Find the fastest T=1 among all variants
+            t1_times = []
+            for suffix in VARIANTS.keys():
+                if suffix in all_data[p] and all_data[p][suffix][0][0] == 1:
+                    t1_times.append(stat(all_data[p][suffix][0][1]))
+            if t1_times:
+                best_stat = min(t1_times, key=lambda x: x[0])
+                global_tS, global_tSerr = best_stat[0], best_stat[1]
 
-    if tS == -1:
-        tS = 1.0 # Prevent crash
-        print(f"  Error: No baseline found for {p}")
+        if global_tS == -1:
+            global_tS = 1.0 # Prevent crash
+            print(f"  Error: No baseline found for {p}")
 
     # --- 2. PLOTTING VARIANTS ---
     ymax = 0
     xmax = 0
 
     for suffix, data_points in all_data[p].items():
-        # Don't plot the serial line itself as a curve
         if suffix == "serial" or suffix not in VARIANTS:
             continue
 
         label_info = VARIANTS[suffix]
 
+        # Get X and Y data
         x = np.asarray([item[0] for item in data_points])
         stats = [stat(item[1]) for item in data_points]
         y   = np.asarray([s[0] for s in stats])
@@ -135,10 +124,22 @@ for ax_abs, p in zip(axs_flat, PATTERNS):
 
         xmax = max(xmax, max(x) if len(x) > 0 else 0)
 
-        # SPEEDUP CALCULATION (Original Logic)
+        # --- DETERMINE BASELINE FOR THIS LINE ---
+        if USE_SELF_BASELINE:
+            # Baseline is THIS variant's T=1 time (assumed to be index 0)
+            if data_points[0][0] == 1:
+                tS, tSerr, _ = stat(data_points[0][1])
+            else:
+                # If T=1 is missing, cannot compute self-speedup easily
+                tS, tSerr = y[0], err[0]
+        else:
+            # Baseline is the global serial file calculated earlier
+            tS, tSerr = global_tS, global_tSerr
+
+        # --- SPEEDUP CALCULATION ---
         t_speedup = tS / y
 
-        # ERROR PROPAGATION (Original Logic)
+        # Error Propagation
         f_yerr = err / y
         f_serr = tSerr / tS
         terr = t_speedup * np.sqrt(f_yerr**2 + f_serr**2)
@@ -158,10 +159,6 @@ for ax_abs, p in zip(axs_flat, PATTERNS):
         ymax = max(ymax, max(t_speedup))
 
     # --- 3. FORMATTING ---
-    if not args.rel:
-        # Ideal line goes from (1,1) to (max, max)
-        ax_abs.plot([1, xmax], [1, xmax], color="black", linestyle="dashed", linewidth=1, alpha=0.5)
-
     ax_abs.set_xticks(range(0, int(xmax + 20), 20))
     ax_abs.set_xlim(0, xmax + 5)
     ax_abs.set_title(f"\\textit{{{p.capitalize()}}}")
